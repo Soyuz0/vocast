@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -83,10 +83,17 @@ CREATE TABLE settings (
 
 # Ordered (version, ddl) pairs applied in sequence. Append new migrations;
 # never edit a released one.
+# Per-publication artwork, so an episode can carry its source's logo instead of
+# whatever image happened to be in the article.
+_SCHEMA_V4 = """
+ALTER TABLE entries ADD COLUMN origin_image_url TEXT;
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
     (3, _SCHEMA_V3),
+    (4, _SCHEMA_V4),
 ]
 
 

@@ -24,8 +24,8 @@ _SOURCE_COLUMNS = """
 
 _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
-    origin_name, status, vocast_episode_id, content_hash, retry_count,
-    next_retry_at, claimed_at, error_message, created_at, updated_at
+    origin_name, origin_image_url, status, vocast_episode_id, content_hash,
+    retry_count, next_retry_at, claimed_at, error_message, created_at, updated_at
 """
 
 
@@ -279,9 +279,9 @@ class EntryRepository:
                 """
                 INSERT INTO entries (
                     source_id, external_guid, article_url, title, author,
-                    published_at, origin_name, status, retry_count,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    published_at, origin_name, origin_image_url, status,
+                    retry_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(source_id, external_guid) DO NOTHING
                 """,
                 (
@@ -292,6 +292,7 @@ class EntryRepository:
                     entry.author,
                     to_iso(entry.published_at),
                     entry.origin_name,
+                    entry.origin_image_url,
                     EntryStatus.PENDING.value,
                     now,
                     now,
@@ -560,17 +561,20 @@ class EntryRepository:
         backlog has been labelled.
         """
         pairs = [
-            (e.origin_name, source_id, e.external_guid)
+            (e.origin_name, e.origin_image_url, source_id, e.external_guid)
             for e in entries
-            if e.origin_name
+            if e.origin_name or e.origin_image_url
         ]
         if not pairs:
             return 0
         with self._db.transaction() as conn:
             cur = conn.executemany(
                 """
-                UPDATE entries SET origin_name = ?
-                WHERE source_id = ? AND external_guid = ? AND origin_name IS NULL
+                UPDATE entries
+                SET origin_name = COALESCE(origin_name, ?),
+                    origin_image_url = COALESCE(origin_image_url, ?)
+                WHERE source_id = ? AND external_guid = ?
+                  AND (origin_name IS NULL OR origin_image_url IS NULL)
                 """,
                 pairs,
             )

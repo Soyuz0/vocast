@@ -55,6 +55,8 @@ class FeedEntry:
     #: Name of the upstream feed that carried the article, e.g. a publication
     #: name. Distinct from the vocast source, which may aggregate many feeds.
     origin_name: str | None = None
+    #: Artwork for that publication, used as the episode's cover.
+    origin_image_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,7 @@ class Entry:
     author: str | None
     published_at: datetime | None
     origin_name: str | None
+    origin_image_url: str | None
     status: EntryStatus
     vocast_episode_id: str | None
     content_hash: str | None
@@ -121,6 +124,7 @@ class Entry:
             author=row["author"],
             published_at=from_iso(row["published_at"]),
             origin_name=row["origin_name"],
+            origin_image_url=row["origin_image_url"],
             status=EntryStatus(row["status"]),
             vocast_episode_id=row["vocast_episode_id"],
             content_hash=row["content_hash"],

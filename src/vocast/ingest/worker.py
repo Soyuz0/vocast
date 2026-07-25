@@ -112,7 +112,10 @@ class Worker:
         )
         try:
             episode = self._generator.generate_from_url(
-                entry.article_url, title=entry.title, byline=entry.origin_name
+                entry.article_url,
+                title=entry.title,
+                byline=entry.origin_name,
+                cover_url=entry.origin_image_url,
             )
         except GenerationCancelled as exc:
             # Deliberate stop: requeue without counting an attempt, so pausing

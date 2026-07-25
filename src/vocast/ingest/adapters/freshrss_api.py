@@ -80,6 +80,7 @@ class FreshRSSAPIAdapter:
             user_agent=str(config.get("user_agent", base.user_agent)),
         )
         self._auth_token: str | None = None
+        self._feed_icons: dict[str, str] = {}
 
     @property
     def source(self) -> Source:
@@ -97,6 +98,7 @@ class FreshRSSAPIAdapter:
             )
 
         token = self._client_login(str(username), str(password))
+        self._feed_icons = self._load_feed_icons(token)
         return self._collect(token)
 
     # -- authentication ----------------------------------------------------
@@ -121,6 +123,63 @@ class FreshRSSAPIAdapter:
         raise FeedParseError(
             "FreshRSS ClientLogin returned no Auth token; check the username and API "
             "password, and that the API is enabled in FreshRSS"
+        )
+
+    # -- per-feed artwork --------------------------------------------------
+
+    def _load_feed_icons(self, token: str) -> dict[str, str]:
+        """Map each subscription's stream id to its icon URL.
+
+        One request covers every feed, so episode artwork costs nothing per
+        article. Failure is tolerated: artwork is cosmetic and must never stop
+        articles being discovered.
+        """
+        if not self._source.config.get("use_feed_icons", True):
+            return {}
+        url = (
+            f"{self._base()}/api/greader.php/reader/api/0/subscription/list?output=json"
+        )
+        try:
+            response = self._fetcher(
+                url,
+                policy=self._policy,
+                headers={"Authorization": f"GoogleLogin auth={token}"},
+            )
+            payload = json.loads(response.text())
+        except (FetchError, json.JSONDecodeError, ValueError):
+            return {}
+
+        icons: dict[str, str] = {}
+        for sub in payload.get("subscriptions") or []:
+            if not isinstance(sub, dict):
+                continue
+            stream_id, icon = sub.get("id"), sub.get("iconUrl")
+            if isinstance(stream_id, str) and isinstance(icon, str) and icon:
+                icons[stream_id] = self._localize(icon)
+        return icons
+
+    def _localize(self, url: str) -> str:
+        """Rewrite a FreshRSS-reported URL onto the host we actually reach it on.
+
+        FreshRSS builds these from its own configured base URL, which is often
+        something like http://127.0.0.1:8082 -- and from another container that
+        resolves to the wrong machine entirely.
+        """
+        try:
+            reported = urllib.parse.urlsplit(url)
+            ours = urllib.parse.urlsplit(self._base())
+        except ValueError:
+            return url
+        if not reported.netloc or reported.netloc == ours.netloc:
+            return url
+        return urllib.parse.urlunsplit(
+            (
+                ours.scheme or reported.scheme,
+                ours.netloc,
+                reported.path,
+                reported.query,
+                reported.fragment,
+            )
         )
 
     # -- pagination --------------------------------------------------------
@@ -231,7 +290,17 @@ class FreshRSSAPIAdapter:
             author=_clean(item.get("author")),
             summary=_summary(item),
             origin_name=_origin_name(item),
+            origin_image_url=self._icon_for(item),
         )
+
+    def _icon_for(self, item: dict[str, Any]) -> str | None:
+        origin = item.get("origin")
+        if not isinstance(origin, dict):
+            return None
+        stream_id = origin.get("streamId")
+        if not isinstance(stream_id, str):
+            return None
+        return getattr(self, "_feed_icons", {}).get(stream_id)
 
     def _base(self) -> str:
         return self._source.url.rstrip("/")

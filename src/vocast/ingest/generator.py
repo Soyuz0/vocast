@@ -98,6 +98,7 @@ class EpisodeGenerator(Protocol):
         *,
         title: str | None = None,
         byline: str | None = None,
+        cover_url: str | None = None,
     ) -> GeneratedEpisode: ...
 
 
@@ -128,9 +129,18 @@ class VocastEpisodeGenerator:
         self._should_continue = should_continue
 
     def generate_from_url(
-        self, url: str, *, title: str | None = None, byline: str | None = None
+        self,
+        url: str,
+        *,
+        title: str | None = None,
+        byline: str | None = None,
+        cover_url: str | None = None,
     ) -> GeneratedEpisode:
-        extracted_title, text, cover_url = self._extract(url)
+        extracted_title, text, article_cover = self._extract(url)
+        # A supplied cover is the publication's own artwork, which keeps every
+        # episode from a source visually consistent; the article's own image is
+        # only a fallback.
+        artwork = cover_url or article_cover
         engine = self._resolve_engine()
         voice = self._voice or engine.default_voice
 
@@ -162,7 +172,7 @@ class VocastEpisodeGenerator:
             voice=voice,
             engine=self._engine_name,
             source=url,
-            cover_url=cover_url,
+            cover_url=artwork,
             mp3_bitrate=self._mp3_bitrate,
             article_text=narration,
         )

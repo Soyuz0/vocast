@@ -45,6 +45,7 @@ _COVER_USER_AGENT = (
 # content-type claims (and not, say, an HTML error page served as image/*).
 _JPEG_MAGIC = b"\xff\xd8\xff"
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_ICO_MAGIC = b"\x00\x00\x01\x00"
 
 
 @dataclass
@@ -104,7 +105,14 @@ def _download_cover(url: str, dest_dir: Path) -> Path | None:
     Returns None on any failure (bad URL, non-image content, timeout) so a
     missing or unusable cover never blocks adding the article.
     """
-    ext_by_type = {"image/jpeg": ".jpg", "image/png": ".png"}
+    ext_by_type = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        # Feed icons are often served as ICO; taggers handle it, and rejecting
+        # it would silently fall back to the generic cover.
+        "image/vnd.microsoft.icon": ".ico",
+        "image/x-icon": ".ico",
+    }
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _COVER_USER_AGENT})
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -114,7 +122,7 @@ def _download_cover(url: str, dest_dir: Path) -> Path | None:
             data = resp.read()
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return None
-    if not (data.startswith(_JPEG_MAGIC) or data.startswith(_PNG_MAGIC)):
+    if not data.startswith((_JPEG_MAGIC, _PNG_MAGIC, _ICO_MAGIC)):
         return None
     dest = dest_dir / f"cover{ext}"
     dest.write_bytes(data)

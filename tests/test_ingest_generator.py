@@ -437,3 +437,35 @@ def test_uncancelled_generation_is_unaffected(
     _stub_extraction(monkeypatch)
     gen = VocastEpisodeGenerator(engine=engine, should_continue=lambda: True)
     assert gen.generate_from_url("https://example.com/a").episode_id
+
+
+# --- cover art -------------------------------------------------------------
+
+
+def test_publication_artwork_wins_over_the_articles_own_image(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """Keeps every episode from one source looking consistent."""
+    _stub_extraction(monkeypatch, cover="https://example.com/article-image.jpg")
+    gen = VocastEpisodeGenerator(engine=engine)
+
+    episode = gen.generate_from_url(
+        "https://example.com/a", cover_url="http://freshrss/f.php?h=logo"
+    )
+
+    assert library.get_entry(episode.episode_id).cover_url == (
+        "http://freshrss/f.php?h=logo"
+    )
+
+
+def test_article_image_is_used_when_the_publication_has_none(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_extraction(monkeypatch, cover="https://example.com/article-image.jpg")
+    gen = VocastEpisodeGenerator(engine=engine)
+
+    episode = gen.generate_from_url("https://example.com/a", cover_url=None)
+
+    assert library.get_entry(episode.episode_id).cover_url == (
+        "https://example.com/article-image.jpg"
+    )

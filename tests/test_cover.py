@@ -191,3 +191,31 @@ def test_backward_compatible_entry_without_cover_field():
         "engine": "kokoro",
     }
     assert LibraryEntry(**data).cover_url is None
+
+
+# --- feed icons as episode art --------------------------------------------
+
+
+def test_ico_cover_is_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Feed icons are often ICO; rejecting them would fall back to the generic
+    cover for most publications."""
+    ico = b"\x00\x00\x01\x00" + b"\x00" * 60
+    monkeypatch.setattr(
+        library.urllib.request,
+        "urlopen",
+        lambda *a, **k: _MockResponse("image/vnd.microsoft.icon", ico),
+    )
+    path = library._download_cover("http://freshrss/f.php?h=x", tmp_path)
+    assert path is not None
+    assert path.suffix == ".ico"
+
+
+def test_non_image_served_as_an_icon_is_still_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setattr(
+        library.urllib.request,
+        "urlopen",
+        lambda *a, **k: _MockResponse("image/x-icon", b"<html>nope</html>"),
+    )
+    assert library._download_cover("http://freshrss/f.php?h=x", tmp_path) is None

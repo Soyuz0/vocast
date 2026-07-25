@@ -50,12 +50,19 @@ class StubGenerator:
         self.results = results or []
         self.calls: list[tuple[str, str | None]] = []
         self.bylines: list[str | None] = []
+        self.covers: list[str | None] = []
 
     def generate_from_url(
-        self, url: str, *, title: str | None = None, byline: str | None = None
+        self,
+        url: str,
+        *,
+        title: str | None = None,
+        byline: str | None = None,
+        cover_url: str | None = None,
     ) -> GeneratedEpisode:
         self.calls.append((url, title))
         self.bylines.append(byline)
+        self.covers.append(cover_url)
         result = (
             self.results.pop(0)
             if self.results
@@ -491,3 +498,21 @@ def test_cancelled_generation_is_requeued_without_counting_an_attempt(
     assert stored.status is EntryStatus.PENDING
     assert stored.retry_count == 0
     assert stored.next_retry_at is None
+
+
+def test_worker_passes_the_publication_artwork_as_the_cover(
+    entries: EntryRepository, source_id: int
+):
+    entries.insert_if_new(
+        FeedEntry(
+            source_id=source_id,
+            external_guid="a",
+            title="An Article",
+            article_url="https://example.com/a",
+            published_at=utcnow(),
+            origin_image_url="http://freshrss/f.php?h=abc",
+        )
+    )
+    generator = StubGenerator()
+    _worker(entries, generator).process_next()
+    assert generator.covers == ["http://freshrss/f.php?h=abc"]

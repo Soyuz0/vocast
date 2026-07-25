@@ -355,3 +355,93 @@ def test_lan_instance_needs_the_private_url_opt_in():
     adapter = _adapter(api, _source(allow_private_urls=True))
     adapter.fetch_entries()
     assert api.calls[0]["policy"].allow_private is True
+
+
+# --- per-publication artwork ----------------------------------------------
+
+
+SUBS = {
+    "subscriptions": [
+        {
+            "id": "feed/11",
+            "title": "LessWrong",
+            "url": "https://lesswrong.com/feed.xml",
+            "iconUrl": "http://127.0.0.1:8082/f.php?h=abc123",
+        },
+        {"id": "feed/12", "title": "No Icon", "url": "https://x.com/f", "iconUrl": ""},
+    ]
+}
+
+
+class FakeAPIWithSubs(FakeAPI):
+    """Also answers the subscription list, as a real instance does."""
+
+    def __call__(self, url, **kwargs):
+        if "subscription/list" in url:
+            self.calls.append({"url": url, **kwargs})
+            return Response(url=url, status=200, body=json.dumps(SUBS).encode())
+        return super().__call__(url, **kwargs)
+
+
+def test_episode_artwork_comes_from_the_feed_icon():
+    api = FakeAPIWithSubs([{"items": [_item("a")]}])
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+    assert entry.origin_image_url == "http://freshrss:80/f.php?h=abc123"
+
+
+def test_icon_host_is_rewritten_to_the_reachable_one():
+    """FreshRSS builds icon URLs from its own base, which may be unreachable."""
+    api = FakeAPIWithSubs([{"items": [_item("a")]}])
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+    assert "127.0.0.1:8082" not in entry.origin_image_url
+    assert entry.origin_image_url.startswith("http://freshrss:80/")
+
+
+def test_feed_without_an_icon_yields_none_so_the_default_is_used():
+    item = _item("a")
+    item["origin"] = {"streamId": "feed/12", "title": "No Icon"}
+    api = FakeAPIWithSubs([{"items": [item]}])
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+    assert entry.origin_image_url is None
+
+
+def test_unknown_feed_yields_no_artwork():
+    item = _item("a")
+    item["origin"] = {"streamId": "feed/999", "title": "Unlisted"}
+    api = FakeAPIWithSubs([{"items": [item]}])
+    assert (
+        FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0].origin_image_url
+        is None
+    )
+
+
+def test_subscription_list_is_fetched_once_per_poll():
+    api = FakeAPIWithSubs(
+        [{"items": [_item("a")], "continuation": "c"}, {"items": [_item("b")]}]
+    )
+    FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+    assert sum(1 for c in api.calls if "subscription/list" in c["url"]) == 1
+
+
+def test_artwork_failure_does_not_stop_discovery():
+    """Artwork is cosmetic; articles matter more."""
+
+    def fetcher(url, **kwargs):
+        if "ClientLogin" in url:
+            return Response(url=url, status=200, body=AUTH_BODY.encode())
+        if "subscription/list" in url:
+            raise FetchError("HTTP 500 from freshrss")
+        return Response(
+            url=url, status=200, body=json.dumps({"items": [_item("a")]}).encode()
+        )
+
+    entries = FreshRSSAPIAdapter(_source(), fetcher=fetcher).fetch_entries()
+    assert len(entries) == 1
+    assert entries[0].origin_image_url is None
+
+
+def test_feed_icons_can_be_turned_off():
+    api = FakeAPIWithSubs([{"items": [_item("a")]}])
+    adapter = FreshRSSAPIAdapter(_source(use_feed_icons=False), fetcher=api)
+    adapter.fetch_entries()
+    assert not any("subscription/list" in c["url"] for c in api.calls)
