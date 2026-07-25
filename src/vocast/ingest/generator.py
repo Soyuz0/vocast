@@ -81,6 +81,8 @@ class GeneratedEpisode:
     title: str
     audio_path: str
     duration_seconds: float | None
+    #: Size on disk, captured here so the feed never has to stat the file.
+    audio_bytes: int | None = None
     content_hash: str | None = None
 
 
@@ -221,6 +223,7 @@ class VocastEpisodeGenerator:
             title=entry.title,
             audio_path=str(entry.audio_path()),
             duration_seconds=entry.duration_seconds,
+            audio_bytes=_size_of(entry.audio_path()),
             content_hash=_hash_text(narration),
         )
 
@@ -293,6 +296,13 @@ def _status_from_message(message: str) -> int | None:
         return None
     candidate = message[len(marker) :].split(" ", 1)[0]
     return int(candidate) if candidate.isdigit() else None
+
+
+def _size_of(path) -> int | None:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return None
 
 
 def _hash_text(text: str) -> str:

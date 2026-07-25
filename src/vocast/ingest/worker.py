@@ -144,6 +144,8 @@ class Worker:
             entry.id,
             episode_id=episode.episode_id,
             content_hash=episode.content_hash,
+            duration_seconds=episode.duration_seconds,
+            audio_bytes=episode.audio_bytes,
         )
         log.info(
             "ready %s",

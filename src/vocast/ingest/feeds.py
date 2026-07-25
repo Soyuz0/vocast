@@ -81,11 +81,17 @@ def collect_episodes(
     seen: set[str] = set()
 
     for details in provenance:
+        seen.add(details.episode_id)
+        if details.duration_seconds is not None and details.audio_bytes is not None:
+            # Everything the item needs is already recorded, so no filesystem
+            # access at all. This is what lets the feed be uncapped: each read
+            # of an episode's metadata costs a round trip to a network share.
+            episodes.append(_from_details(details, audio_base, token=token))
+            continue
+        # Recorded before those were stored; fall back to reading the library.
         entry = get_entry(details.episode_id)
         if entry is None:
-            # Audio was removed from the library but the row still points at it.
             continue
-        seen.add(entry.id)
         episodes.append(_to_feed_episode(entry, details, audio_base, token=token))
 
     if source_id is None:
@@ -118,6 +124,33 @@ def _provenance_by_episode(
     if entries is None:
         return []
     return entries.published_episodes(source_id=source_id, limit=limit)
+
+
+def _from_details(
+    details: PublishedEpisode, base_url: str, *, token: str | None = None
+) -> FeedEpisode:
+    """Build a feed item purely from database columns."""
+    return FeedEpisode(
+        episode_id=details.episode_id,
+        title=details.title,
+        audio_url=with_token(f"{base_url}/audio/{details.episode_id}.mp3", token),
+        size_bytes=details.audio_bytes or 0,
+        published_at=details.published_at or _episode_id_timestamp(details.episode_id),
+        duration_seconds=details.duration_seconds,
+        article_url=details.article_url,
+        source_name=details.source_name,
+        origin_name=details.origin_name,
+    )
+
+
+def _episode_id_timestamp(episode_id: str) -> datetime:
+    """Recover synthesis time from the id, which begins with a UTC stamp."""
+    try:
+        return datetime.strptime(episode_id[:16], "%Y%m%dT%H%M%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except (ValueError, IndexError):
+        return datetime.now(timezone.utc)
 
 
 def _to_feed_episode(

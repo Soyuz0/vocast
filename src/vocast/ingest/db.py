@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -89,11 +89,20 @@ _SCHEMA_V4 = """
 ALTER TABLE entries ADD COLUMN origin_image_url TEXT;
 """
 
+# Duration and byte size of the generated audio. Recorded here so rendering a
+# feed needs no filesystem access at all: reading one meta.json per episode is
+# imperceptible for a handful and takes minutes for thousands on a network share.
+_SCHEMA_V5 = """
+ALTER TABLE entries ADD COLUMN duration_seconds REAL;
+ALTER TABLE entries ADD COLUMN audio_bytes INTEGER;
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
     (3, _SCHEMA_V3),
     (4, _SCHEMA_V4),
+    (5, _SCHEMA_V5),
 ]
 
 

@@ -325,6 +325,7 @@ def cmd_config_show(args: argparse.Namespace) -> int:
             # Reported as a boolean, never echoed: whether the feed is
             # protected is exactly the thing an operator needs to confirm.
             "feed_token": "<set>" if config.server.feed_token else None,
+            "feed_max_items": config.server.feed_max_items or "unlimited",
         },
         "database": {"path": str(config.database.path)},
         "storage": {"library_path": str(config.storage.library_path)},

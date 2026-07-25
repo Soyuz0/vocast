@@ -744,3 +744,78 @@ def test_episode_stays_in_the_feed_while_being_regenerated(
 
     guids = [i.find("guid").text for i in _items(_render(entries))]
     assert guids == ["20260604T120000Z_a_aaa111"]
+
+
+# --- uncapped feeds --------------------------------------------------------
+
+
+def test_feed_needs_no_filesystem_access_once_size_is_recorded(
+    lib: Path, sources: SourceRepository, entries: EntryRepository, monkeypatch
+):
+    """Each library read is a round trip to a network share; at thousands of
+    episodes that is minutes per request."""
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha")
+    source = sources.add(name="Tech", kind="rss", url="https://example.com/f.xml")
+    entry = entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="g",
+            title="Alpha",
+            article_url="https://example.com/a",
+            published_at=utcnow(),
+            origin_name="Tech",
+        )
+    )
+    entries.mark_ready(
+        entry.id,
+        episode_id="20260604T120000Z_a_aaa111",
+        duration_seconds=123.4,
+        audio_bytes=4242,
+    )
+
+    def explode(entry_id: str):
+        raise AssertionError("feed must not read the library when size is known")
+
+    monkeypatch.setattr(feeds_module, "get_entry", explode)
+    [episode] = collect_episodes(entries, base_url=BASE)
+
+    assert episode.size_bytes == 4242
+    assert episode.duration_seconds == 123.4
+    assert episode.title == "Alpha"
+
+
+def test_feed_falls_back_to_the_library_for_older_episodes(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """Episodes finished before size was recorded must still render."""
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha", audio=b"x" * 99)
+    _queue_ready(
+        sources, entries, source_name="Tech", episode_id="20260604T120000Z_a_aaa111"
+    )
+
+    [episode] = collect_episodes(entries, base_url=BASE)
+    assert episode.size_bytes == 99
+
+
+def test_uncapped_feed_lists_everything(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    source = sources.add(name="Tech", kind="rss", url="https://example.com/f.xml")
+    for index in range(12):
+        entry = entries.insert_if_new(
+            FeedEntry(
+                source_id=source.id,
+                external_guid=f"g{index}",
+                title=f"Episode {index}",
+                article_url=f"https://example.com/{index}",
+                published_at=utcnow() - timedelta(days=index),
+            )
+        )
+        entries.mark_ready(
+            entry.id,
+            episode_id=f"2026060{index % 10}T120000Z_ep_{index}",
+            duration_seconds=60.0,
+            audio_bytes=1000,
+        )
+
+    assert len(collect_episodes(entries, base_url=BASE, max_items=None)) == 12

@@ -25,7 +25,8 @@ _SOURCE_COLUMNS = """
 _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
     origin_name, origin_image_url, status, vocast_episode_id, content_hash,
-    retry_count, next_retry_at, claimed_at, error_message, created_at, updated_at
+    duration_seconds, audio_bytes, retry_count, next_retry_at, claimed_at,
+    error_message, created_at, updated_at
 """
 
 
@@ -46,6 +47,8 @@ class PublishedEpisode:
     author: str | None
     published_at: datetime | None
     origin_name: str | None = None
+    duration_seconds: float | None = None
+    audio_bytes: int | None = None
     summary: str | None = None
 
 
@@ -391,19 +394,39 @@ class EntryRepository:
         return Entry.from_row(claimed)
 
     def mark_ready(
-        self, entry_id: int, *, episode_id: str, content_hash: str | None = None
+        self,
+        entry_id: int,
+        *,
+        episode_id: str,
+        content_hash: str | None = None,
+        duration_seconds: float | None = None,
+        audio_bytes: int | None = None,
     ) -> None:
+        """Record a finished episode, including what the feed needs to describe it.
+
+        Duration and size are stored so feed rendering never has to stat or read
+        the audio files, which is what makes an uncapped feed affordable.
+        """
         now = to_iso(utcnow())
         with self._db.transaction() as conn:
             conn.execute(
                 """
                 UPDATE entries
                 SET status = ?, vocast_episode_id = ?, content_hash = ?,
+                    duration_seconds = ?, audio_bytes = ?,
                     error_message = NULL, next_retry_at = NULL, claimed_at = NULL,
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (EntryStatus.READY.value, episode_id, content_hash, now, entry_id),
+                (
+                    EntryStatus.READY.value,
+                    episode_id,
+                    content_hash,
+                    duration_seconds,
+                    audio_bytes,
+                    now,
+                    entry_id,
+                ),
             )
 
     def schedule_retry(
@@ -537,7 +560,8 @@ class EntryRepository:
                 f"""
                 SELECT e.vocast_episode_id, e.id AS entry_id, e.source_id,
                        s.name AS source_name, e.article_url, e.title, e.author,
-                       e.published_at, e.origin_name
+                       e.published_at, e.origin_name, e.duration_seconds,
+                       e.audio_bytes
                 FROM entries e
                 JOIN sources s ON s.id = e.source_id
                 WHERE {" AND ".join(clauses)}
@@ -557,6 +581,8 @@ class EntryRepository:
                 author=r["author"],
                 published_at=from_iso(r["published_at"]),
                 origin_name=r["origin_name"],
+                duration_seconds=r["duration_seconds"],
+                audio_bytes=r["audio_bytes"],
             )
             for r in rows
         ]

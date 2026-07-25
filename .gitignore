@@ -24,3 +24,4 @@ assets/downcast-demo.mp4
 # Live deployment state: database, generated audio, host config
 data/
 docker-compose.override.yml
+DEPLOYMENT-NOTES.md
