@@ -81,6 +81,7 @@ class FreshRSSAPIAdapter:
         )
         self._auth_token: str | None = None
         self._feed_icons: dict[str, str] = {}
+        self._feed_sites: dict[str, str] = {}
         #: True only when the last fetch reached the end of the stream. Anything
         #: that reconciles "what is still unread upstream" must check this: from
         #: a partial walk, absence proves nothing.
@@ -161,6 +162,9 @@ class FreshRSSAPIAdapter:
             stream_id, icon = sub.get("id"), sub.get("iconUrl")
             if isinstance(stream_id, str) and isinstance(icon, str) and icon:
                 icons[stream_id] = self._localize(icon)
+            site = sub.get("htmlUrl")
+            if isinstance(stream_id, str) and isinstance(site, str) and site:
+                self._feed_sites[stream_id] = site
         return icons
 
     def _localize(self, url: str) -> str:
@@ -300,7 +304,37 @@ class FreshRSSAPIAdapter:
             summary=_summary(item),
             origin_name=_origin_name(item),
             origin_image_url=self._icon_for(item),
+            feed_content=self._own_text(item, article_url),
         )
+
+    def _own_text(self, item: dict[str, Any], article_url: str) -> str | None:
+        """The post's text, when the link points away from the publication.
+
+        Link-blog posts link outward to whatever is being discussed, so
+        following the link narrates someone else's article rather than the post
+        itself -- and fails outright when that target is paywalled. When the
+        link leaves the feed's own site and the entry carries a substantial body
+        of its own, that body is the article.
+
+        Also catches publications served from two domains (a custom domain with
+        the platform's own URL in the link). Those are not link posts, but their
+        feed carries the full text, so preferring it is still correct.
+        """
+        config = self._source.config or {}
+        if not config.get("prefer_own_text", True):
+            return None
+        site = self._feed_sites.get(
+            (item.get("origin") or {}).get("streamId", "")
+            if isinstance(item.get("origin"), dict)
+            else ""
+        )
+        if not site or _same_site(site, article_url):
+            return None
+        body = _body_html(item)
+        if not body:
+            return None
+        minimum = int(config.get("min_own_text_chars", 400))
+        return body if len(_visible_length(body)) >= minimum else None
 
     def _icon_for(self, item: dict[str, Any]) -> str | None:
         origin = item.get("origin")
@@ -330,6 +364,32 @@ def _alternate_href(item: dict[str, Any]) -> str | None:
                 if isinstance(href, str) and href.startswith(("http://", "https://")):
                     return href
     return None
+
+
+def _same_site(site: str, article_url: str) -> bool:
+    def host(url: str) -> str:
+        parsed = urllib.parse.urlsplit(url).hostname or ""
+        return parsed.removeprefix("www.").lower()
+
+    return host(site) == host(article_url)
+
+
+def _body_html(item: dict[str, Any]) -> str | None:
+    for key in ("content", "summary"):
+        block = item.get(key)
+        if isinstance(block, dict):
+            text = block.get("content")
+            if isinstance(text, str) and text.strip():
+                return text
+    return None
+
+
+def _visible_length(html_fragment: str) -> str:
+    import html as html_module
+    import re
+
+    stripped = re.sub(r"<[^>]+>", " ", html_fragment)
+    return re.sub(r"\s+", " ", html_module.unescape(stripped)).strip()
 
 
 def _origin_name(item: dict[str, Any]) -> str | None:

@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -106,6 +106,14 @@ ALTER TABLE entries ADD COLUMN marked_read_at TEXT;
 CREATE INDEX idx_entries_downloaded ON entries(downloaded_at);
 """
 
+# The post's own text, when the article to narrate is the feed entry itself
+# rather than whatever its link points at. Link-blog posts ("linked list" items)
+# link outward to the thing being discussed, so following the link narrates
+# someone else's article instead of the post.
+_SCHEMA_V7 = """
+ALTER TABLE entries ADD COLUMN feed_content TEXT;
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
@@ -113,6 +121,7 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (4, _SCHEMA_V4),
     (5, _SCHEMA_V5),
     (6, _SCHEMA_V6),
+    (7, _SCHEMA_V7),
 ]
 
 

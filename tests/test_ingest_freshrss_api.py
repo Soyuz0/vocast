@@ -445,3 +445,93 @@ def test_feed_icons_can_be_turned_off():
     adapter = FreshRSSAPIAdapter(_source(use_feed_icons=False), fetcher=api)
     adapter.fetch_entries()
     assert not any("subscription/list" in c["url"] for c in api.calls)
+
+
+# --- link-blog posts -------------------------------------------------------
+
+BODY = "<p>" + ("Gruber's own commentary on the linked piece. " * 12) + "</p>"
+
+SUBS_SITES = {
+    "subscriptions": [
+        {
+            "id": "feed/11",
+            "title": "Daring Fireball",
+            "url": "https://daringfireball.net/feeds/main",
+            "htmlUrl": "https://daringfireball.net/",
+            "iconUrl": "",
+        }
+    ]
+}
+
+
+class FakeAPIWithSites(FakeAPI):
+    def __call__(self, url, **kwargs):
+        if "subscription/list" in url:
+            self.calls.append({"url": url, **kwargs})
+            return Response(url=url, status=200, body=json.dumps(SUBS_SITES).encode())
+        return super().__call__(url, **kwargs)
+
+
+def _linked_item(href: str, body: str = BODY) -> dict:
+    item = _item("a", href=href)
+    item["content"] = {"content": body}
+    return item
+
+
+def test_outbound_link_narrates_the_post_not_the_target():
+    """A link post points at what it discusses; following it reads the wrong
+    article, and fails outright when the target is paywalled."""
+    api = FakeAPIWithSites([{"items": [_linked_item("https://www.theguardian.com/x")]}])
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+
+    assert entry.feed_content is not None
+    assert "own commentary" in entry.feed_content
+    # The link is still recorded, so the feed can point readers at it.
+    assert entry.article_url == "https://www.theguardian.com/x"
+
+
+def test_link_to_the_publications_own_site_is_fetched_normally():
+    api = FakeAPIWithSites(
+        [{"items": [_linked_item("https://daringfireball.net/2025/05/post")]}]
+    )
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+    assert entry.feed_content is None
+
+
+def test_www_prefix_does_not_count_as_a_different_site():
+    api = FakeAPIWithSites(
+        [{"items": [_linked_item("https://www.daringfireball.net/2025/05/post")]}]
+    )
+    assert (
+        FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0].feed_content
+        is None
+    )
+
+
+def test_outbound_link_with_only_a_stub_body_is_still_fetched():
+    """A teaser is not the article; the link is."""
+    api = FakeAPIWithSites(
+        [{"items": [_linked_item("https://elsewhere.example/x", "<p>Short.</p>")]}]
+    )
+    assert (
+        FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0].feed_content
+        is None
+    )
+
+
+def test_behaviour_can_be_turned_off():
+    api = FakeAPIWithSites([{"items": [_linked_item("https://elsewhere.example/x")]}])
+    source = _source(prefer_own_text=False)
+    assert (
+        FreshRSSAPIAdapter(source, fetcher=api).fetch_entries()[0].feed_content is None
+    )
+
+
+def test_unknown_feed_site_falls_back_to_fetching_the_link():
+    item = _linked_item("https://elsewhere.example/x")
+    item["origin"] = {"streamId": "feed/999", "title": "Unlisted"}
+    api = FakeAPIWithSites([{"items": [item]}])
+    assert (
+        FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0].feed_content
+        is None
+    )

@@ -13,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
+import trafilatura
+
 from .. import library
 from ..engines import AudioChunk, TTSEngine, get_engine
 from ..fetch import fetch_article
@@ -115,6 +117,7 @@ class EpisodeGenerator(Protocol):
         byline: str | None = None,
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
+        content_html: str | None = None,
     ) -> GeneratedEpisode: ...
 
 
@@ -152,8 +155,13 @@ class VocastEpisodeGenerator:
         byline: str | None = None,
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
+        content_html: str | None = None,
     ) -> GeneratedEpisode:
-        extracted_title, text, article_cover = self._extract(url)
+        if content_html:
+            # The post's own text, supplied because its link points elsewhere.
+            extracted_title, text, article_cover = self._from_html(content_html, url)
+        else:
+            extracted_title, text, article_cover = self._extract(url)
         # A supplied cover is the publication's own artwork, which keeps every
         # episode from a source visually consistent; the article's own image is
         # only a fallback.
@@ -250,6 +258,34 @@ class VocastEpisodeGenerator:
                 "paywall, consent screen, or navigation stub rather than an article"
             )
         return extracted_title, cleaned, cover_url
+
+    def _from_html(
+        self, content_html: str, url: str
+    ) -> tuple[str | None, str, str | None]:
+        """Extract narratable text from a feed entry's own body.
+
+        Run through the same extractor as a web page so the cleanup rules match:
+        code blocks stripped, boilerplate dropped, paragraphs preserved.
+        """
+        try:
+            extracted = trafilatura.extract(
+                f"<html><body>{content_html}</body></html>",
+                include_comments=False,
+                include_tables=False,
+                prune_xpath=["//pre"],
+            )
+        except Exception as exc:
+            raise PermanentGenerationError(
+                f"could not read the post body for {url}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        cleaned = (extracted or "").strip()
+        if len(cleaned) < self._min_chars:
+            raise PermanentGenerationError(
+                f"the post body for {url} yielded only {len(cleaned)} characters, "
+                f"below the {self._min_chars} character minimum"
+            )
+        return None, cleaned, None
 
     def _fetch_html(self, url: str) -> str:
         return fetch(url, policy=self._policy).text()

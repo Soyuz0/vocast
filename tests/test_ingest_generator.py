@@ -554,3 +554,48 @@ def test_replacement_refuses_an_unsafe_id(lib: Path, engine: FakeEngine):
             voice="v",
             engine="e",
         )
+
+
+# --- narrating a post body -------------------------------------------------
+
+
+def test_post_body_is_narrated_without_fetching_the_link(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """The whole point: a link post must not fetch what it links to."""
+
+    def explode(url, **kwargs):
+        raise AssertionError("must not fetch the outbound link")
+
+    monkeypatch.setattr(generator_module, "fetch_article", explode)
+    body = "<p>" + ("The author's own commentary here. " * 20) + "</p>"
+
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://elsewhere.example/x", title="A Link Post", content_html=body
+    )
+
+    assert episode.episode_id
+    assert "own commentary" in library.get_entry(episode.episode_id).article_text()
+
+
+def test_post_body_keeps_the_title_and_byline_intro(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    body = "<p>" + ("Commentary text. " * 40) + "</p>"
+    VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://elsewhere.example/x",
+        title="A Link Post",
+        byline="Daring Fireball",
+        content_html=body,
+    )
+    assert engine.synthesized[0].startswith("A Link Post.")
+    assert "by Daring Fireball." in engine.synthesized[0]
+
+
+def test_too_thin_a_post_body_fails_clearly(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    with pytest.raises(PermanentGenerationError, match="below the"):
+        VocastEpisodeGenerator(engine=engine).generate_from_url(
+            "https://elsewhere.example/x", content_html="<p>Too short.</p>"
+        )

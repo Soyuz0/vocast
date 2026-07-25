@@ -52,6 +52,7 @@ class StubGenerator:
         self.bylines: list[str | None] = []
         self.covers: list[str | None] = []
         self.replaced: list[str | None] = []
+        self.bodies: list[str | None] = []
 
     def generate_from_url(
         self,
@@ -61,11 +62,13 @@ class StubGenerator:
         byline: str | None = None,
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
+        content_html: str | None = None,
     ) -> GeneratedEpisode:
         self.calls.append((url, title))
         self.bylines.append(byline)
         self.covers.append(cover_url)
         self.replaced.append(replace_episode_id)
+        self.bodies.append(content_html)
         result = (
             self.results.pop(0)
             if self.results

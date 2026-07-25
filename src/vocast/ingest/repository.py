@@ -25,8 +25,8 @@ _SOURCE_COLUMNS = """
 _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
     origin_name, origin_image_url, status, vocast_episode_id, content_hash,
-    duration_seconds, audio_bytes, downloaded_at, marked_read_at, retry_count,
-    next_retry_at, claimed_at, error_message, created_at, updated_at
+    duration_seconds, audio_bytes, downloaded_at, marked_read_at, feed_content,
+    retry_count, next_retry_at, claimed_at, error_message, created_at, updated_at
 """
 
 
@@ -282,9 +282,9 @@ class EntryRepository:
                 """
                 INSERT INTO entries (
                     source_id, external_guid, article_url, title, author,
-                    published_at, origin_name, origin_image_url, status,
-                    retry_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    published_at, origin_name, origin_image_url, feed_content,
+                    status, retry_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(source_id, external_guid) DO NOTHING
                 """,
                 (
@@ -296,6 +296,7 @@ class EntryRepository:
                     to_iso(entry.published_at),
                     entry.origin_name,
                     entry.origin_image_url,
+                    entry.feed_content,
                     EntryStatus.PENDING.value,
                     now,
                     now,
@@ -597,15 +598,21 @@ class EntryRepository:
         ]
 
     def backfill_origin(self, source_id: int, entries: Iterable[FeedEntry]) -> int:
-        """Fill in origin_name for rows recorded before it was captured.
+        """Fill in provenance and post text for rows recorded before those existed.
 
         Only touches rows where it is still NULL, so it is a no-op once the
         backlog has been labelled.
         """
         pairs = [
-            (e.origin_name, e.origin_image_url, source_id, e.external_guid)
+            (
+                e.origin_name,
+                e.origin_image_url,
+                e.feed_content,
+                source_id,
+                e.external_guid,
+            )
             for e in entries
-            if e.origin_name or e.origin_image_url
+            if e.origin_name or e.origin_image_url or e.feed_content
         ]
         if not pairs:
             return 0
@@ -614,9 +621,11 @@ class EntryRepository:
                 """
                 UPDATE entries
                 SET origin_name = COALESCE(origin_name, ?),
-                    origin_image_url = COALESCE(origin_image_url, ?)
+                    origin_image_url = COALESCE(origin_image_url, ?),
+                    feed_content = COALESCE(feed_content, ?)
                 WHERE source_id = ? AND external_guid = ?
-                  AND (origin_name IS NULL OR origin_image_url IS NULL)
+                  AND (origin_name IS NULL OR origin_image_url IS NULL
+                       OR feed_content IS NULL)
                 """,
                 pairs,
             )

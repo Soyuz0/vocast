@@ -117,6 +117,7 @@ class Worker:
                 byline=entry.origin_name,
                 cover_url=entry.origin_image_url,
                 replace_episode_id=entry.vocast_episode_id,
+                content_html=entry.feed_content,
             )
         except GenerationCancelled as exc:
             # Deliberate stop: requeue without counting an attempt, so pausing

@@ -57,6 +57,9 @@ class FeedEntry:
     origin_name: str | None = None
     #: Artwork for that publication, used as the episode's cover.
     origin_image_url: str | None = None
+    #: The post's own text, set when it should be narrated in preference to
+    #: fetching article_url. See _SCHEMA_V7.
+    feed_content: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,7 @@ class Entry:
     audio_bytes: int | None
     downloaded_at: datetime | None
     marked_read_at: datetime | None
+    feed_content: str | None
     status: EntryStatus
     vocast_episode_id: str | None
     content_hash: str | None
@@ -133,6 +137,7 @@ class Entry:
             audio_bytes=row["audio_bytes"],
             downloaded_at=from_iso(row["downloaded_at"]),
             marked_read_at=from_iso(row["marked_read_at"]),
+            feed_content=row["feed_content"],
             status=EntryStatus(row["status"]),
             vocast_episode_id=row["vocast_episode_id"],
             content_hash=row["content_hash"],
