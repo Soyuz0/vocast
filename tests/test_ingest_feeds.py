@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree
+from xml.etree import ElementTree as ET
 
 import pytest
 
@@ -18,6 +19,7 @@ from vocast.ingest.repository import EntryRepository, SourceRepository
 from vocast.ingest.timeutils import utcnow
 
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+NS = {"itunes": ITUNES_NS, "content": "http://purl.org/rss/1.0/modules/content/"}
 BASE = "https://podcast.example.com"
 
 
@@ -397,11 +399,16 @@ def test_description_is_just_a_link_to_the_original(
         published_at=utcnow() - timedelta(days=1),
     )
 
-    description = _items(_render(entries))[0].find("description").text
-    assert description == "Read the original: https://example.com/alpha"
-    assert "The full body of the article." not in description
+    item = _items(_render(entries))[0]
+    notes = item.find("description").text
+    # HTML, so clients treat it as show notes rather than a subtitle.
+    assert notes == '<p><a href="https://example.com/alpha">Read the original</a></p>'
+    assert item.find("itunes:summary", NS).text == (
+        "Read the original: https://example.com/alpha"
+    )
+    assert "The full body of the article." not in notes
     # Provenance moved to the title and itunes:author; it is not repeated here.
-    assert "Originally published" not in description
+    assert "Originally published" not in notes
 
 
 def test_manual_episode_description_falls_back_to_its_source_url(
@@ -443,7 +450,9 @@ def test_description_falls_back_to_the_title_with_no_metadata(
     lib: Path, entries: EntryRepository
 ):
     _make_episode(lib, "20260604T120000Z_a_aaa111", "Just A Title", source=None)
-    assert _items(_render(entries))[0].find("description").text == "Just A Title"
+    item = _items(_render(entries))[0]
+    assert item.find("description").text == "<p>Just A Title</p>"
+    assert item.find("itunes:summary", NS).text == "Just A Title"
 
 
 # --- title prefix ----------------------------------------------------------
@@ -636,3 +645,86 @@ def test_capped_feed_only_reads_the_metadata_it_needs(
     collect_episodes(entries, base_url=BASE, max_items=2)
 
     assert len(reads) == 2
+
+
+def test_pubdate_keeps_the_articles_time_not_just_its_date(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """Clients order by timestamp, so seconds must survive into the feed."""
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha")
+    _queue_ready(
+        sources,
+        entries,
+        source_name="Tech",
+        episode_id="20260604T120000Z_a_aaa111",
+        published_at=datetime(2026, 7, 25, 9, 11, 18, tzinfo=timezone.utc),
+    )
+
+    from email.utils import parsedate_to_datetime
+
+    rendered = _items(_render(entries))[0].find("pubDate").text
+    assert parsedate_to_datetime(rendered) == datetime(
+        2026, 7, 25, 9, 11, 18, tzinfo=timezone.utc
+    )
+
+
+def test_articles_sharing_a_timestamp_get_a_stable_order(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """Date-only feeds all land on midnight; order must not be arbitrary."""
+    midnight = datetime(2026, 7, 20, 0, 0, 0, tzinfo=timezone.utc)
+    for index in range(4):
+        episode_id = f"2026060{index}T120000Z_ep_{index}"
+        _make_episode(lib, episode_id, f"Episode {index}")
+        _queue_ready(
+            sources,
+            entries,
+            source_name="T",
+            episode_id=episode_id,
+            guid=f"g{index}",
+            published_at=midnight,
+        )
+
+    first = [e.episode_id for e in collect_episodes(entries, base_url=BASE)]
+    second = [e.episode_id for e in collect_episodes(entries, base_url=BASE)]
+    assert first == second
+    assert first == sorted(first, reverse=True)
+
+
+def test_show_notes_are_html_with_a_real_link(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """Plain text tends to be shown as a subtitle rather than as notes."""
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha")
+    _queue_ready(
+        sources,
+        entries,
+        source_name="Tech",
+        episode_id="20260604T120000Z_a_aaa111",
+        article_url="https://example.com/a?x=1&y=2",
+    )
+
+    xml = _render(entries)
+    item = _items(xml)[0]
+    assert "<![CDATA[" in xml
+    assert item.find("content:encoded", NS).text.startswith("<p><a href=")
+    # Parsing returns the markup as text, proving CDATA rather than escaping.
+    assert item.find("description").text == (
+        '<p><a href="https://example.com/a?x=1&amp;y=2">Read the original</a></p>'
+    )
+
+
+def test_cdata_terminator_in_a_url_cannot_break_the_feed():
+    from vocast.ingest.feeds import FeedEpisode, _cdata, episode_notes_html
+
+    episode = FeedEpisode(
+        episode_id="x",
+        title="T",
+        audio_url="http://h/a.mp3",
+        size_bytes=1,
+        published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        article_url="https://example.com/a]]>evil",
+    )
+    wrapped = _cdata(episode_notes_html(episode))
+    assert wrapped.count("<![CDATA[") == wrapped.count("]]>") - wrapped.count("]]]]>")
+    ET.fromstring(f"<d>{wrapped}</d>")

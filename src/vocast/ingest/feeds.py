@@ -96,7 +96,10 @@ def collect_episodes(
                 continue
             episodes.append(_to_feed_episode(entry, None, audio_base, token=token))
 
-    episodes.sort(key=lambda e: e.published_at, reverse=True)
+    # Newest published first, with an explicit tie-break. Ties are common:
+    # feeds that publish a date but no time all land on midnight, so relying on
+    # sort stability would make their order depend on query order.
+    episodes.sort(key=lambda e: (e.published_at, e.episode_id), reverse=True)
     if max_items is not None:
         return episodes[:max_items]
     return episodes
@@ -181,16 +184,34 @@ def episode_title(episode: FeedEpisode) -> str:
 
 
 def episode_description(episode: FeedEpisode) -> str:
-    """A link back to the original article, nothing more.
+    """Plain-text notes, for clients that do not render HTML.
 
-    The narrated text is deliberately not inlined here: podcast clients render
-    show notes as a wall of text, which reads badly for a full article, and it
-    would bloat the feed by megabytes. The text is still stored next to the
-    audio (see LibraryEntry.article_path) for anything that wants it.
+    The narrated text is deliberately not inlined: podcast clients render show
+    notes as an undifferentiated wall of text, which reads badly for a full
+    article, and it would bloat the feed by megabytes. The text is still stored
+    next to the audio (see LibraryEntry.article_path) for anything that wants it.
     """
     if episode.article_url:
         return f"Read the original: {episode.article_url}"
     return episode.title
+
+
+def episode_notes_html(episode: FeedEpisode) -> str:
+    """Show notes as HTML, with the link as a real anchor.
+
+    Clients decide what counts as "show notes" largely by whether the content is
+    HTML; a bare plain-text line often ends up shown as a subtitle instead. So
+    the notes are emitted as markup, wrapped in CDATA.
+    """
+    if not episode.article_url:
+        return f"<p>{escape(episode.title)}</p>"
+    href = escape(episode.article_url, {'"': "&quot;"})
+    return f'<p><a href="{href}">Read the original</a></p>'
+
+
+def _cdata(text: str) -> str:
+    """Wrap text in CDATA, splitting any sequence that would close it early."""
+    return f"<![CDATA[{text.replace(']]>', ']]]]><![CDATA[>')}]]>"
 
 
 def build_podcast_rss(channel: FeedChannel, episodes: list[FeedEpisode]) -> str:
@@ -235,7 +256,15 @@ def _render_item(episode: FeedEpisode) -> str:
     parts = [
         "    <item>",
         f"      <title>{escape(episode_title(episode))}</title>",
-        f"      <description>{escape(episode_description(episode))}</description>",
+        f"      <description>{_cdata(episode_notes_html(episode))}</description>",
+        (
+            f"      <content:encoded>{_cdata(episode_notes_html(episode))}"
+            "</content:encoded>"
+        ),
+        (
+            f"      <itunes:summary>{escape(episode_description(episode))}"
+            "</itunes:summary>"
+        ),
         f'      <guid isPermaLink="false">{escape(episode.episode_id)}</guid>',
         f"      <pubDate>{format_datetime(episode.published_at)}</pubDate>",
         (
