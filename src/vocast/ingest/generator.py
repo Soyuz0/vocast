@@ -107,6 +107,7 @@ class VocastEpisodeGenerator:
             source=url,
             cover_url=cover_url,
             mp3_bitrate=self._mp3_bitrate,
+            article_text=text,
         )
         log.info(
             "episode generated %s",

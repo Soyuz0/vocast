@@ -321,6 +321,10 @@ def cmd_config_show(args: argparse.Namespace) -> int:
             "host": config.server.host,
             "port": config.server.port,
             "public_base_url": config.server.public_base_url,
+            "audio_base_url": config.server.audio_base_url,
+            # Reported as a boolean, never echoed: whether the feed is
+            # protected is exactly the thing an operator needs to confirm.
+            "feed_token": "<set>" if config.server.feed_token else None,
         },
         "database": {"path": str(config.database.path)},
         "storage": {"library_path": str(config.storage.library_path)},

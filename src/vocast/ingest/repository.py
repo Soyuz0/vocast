@@ -24,8 +24,8 @@ _SOURCE_COLUMNS = """
 
 _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
-    status, vocast_episode_id, content_hash, retry_count, next_retry_at,
-    claimed_at, error_message, created_at, updated_at
+    origin_name, status, vocast_episode_id, content_hash, retry_count,
+    next_retry_at, claimed_at, error_message, created_at, updated_at
 """
 
 
@@ -45,6 +45,7 @@ class PublishedEpisode:
     title: str
     author: str | None
     published_at: datetime | None
+    origin_name: str | None = None
     summary: str | None = None
 
 
@@ -278,8 +279,9 @@ class EntryRepository:
                 """
                 INSERT INTO entries (
                     source_id, external_guid, article_url, title, author,
-                    published_at, status, retry_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    published_at, origin_name, status, retry_count,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(source_id, external_guid) DO NOTHING
                 """,
                 (
@@ -289,6 +291,7 @@ class EntryRepository:
                     entry.title,
                     entry.author,
                     to_iso(entry.published_at),
+                    entry.origin_name,
                     EntryStatus.PENDING.value,
                     now,
                     now,
@@ -497,7 +500,7 @@ class EntryRepository:
         return counts
 
     def published_episodes(
-        self, *, source_id: int | None = None
+        self, *, source_id: int | None = None, limit: int | None = None
     ) -> list[PublishedEpisode]:
         """Ready episodes joined to their source, newest first.
 
@@ -515,13 +518,14 @@ class EntryRepository:
                 f"""
                 SELECT e.vocast_episode_id, e.id AS entry_id, e.source_id,
                        s.name AS source_name, e.article_url, e.title, e.author,
-                       e.published_at
+                       e.published_at, e.origin_name
                 FROM entries e
                 JOIN sources s ON s.id = e.source_id
                 WHERE {" AND ".join(clauses)}
                 ORDER BY COALESCE(e.published_at, e.created_at) DESC, e.id DESC
+                {"LIMIT ?" if limit else ""}
                 """,
-                tuple(params),
+                tuple([*params, limit] if limit else params),
             ).fetchall()
         return [
             PublishedEpisode(
@@ -533,9 +537,33 @@ class EntryRepository:
                 title=r["title"],
                 author=r["author"],
                 published_at=from_iso(r["published_at"]),
+                origin_name=r["origin_name"],
             )
             for r in rows
         ]
+
+    def backfill_origin(self, source_id: int, entries: Iterable[FeedEntry]) -> int:
+        """Fill in origin_name for rows recorded before it was captured.
+
+        Only touches rows where it is still NULL, so it is a no-op once the
+        backlog has been labelled.
+        """
+        pairs = [
+            (e.origin_name, source_id, e.external_guid)
+            for e in entries
+            if e.origin_name
+        ]
+        if not pairs:
+            return 0
+        with self._db.transaction() as conn:
+            cur = conn.executemany(
+                """
+                UPDATE entries SET origin_name = ?
+                WHERE source_id = ? AND external_guid = ? AND origin_name IS NULL
+                """,
+                pairs,
+            )
+            return cur.rowcount
 
     def known_guids(self, source_id: int, guids: Iterable[str]) -> set[str]:
         """Of these external guids, which does this source already track?

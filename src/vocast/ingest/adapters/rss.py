@@ -88,6 +88,7 @@ class GenericRSSAdapter:
 
     def _parse(self, raw: bytes) -> list[FeedEntry]:
         parsed = feedparser.parse(raw)
+        self._origin_name = _channel_title(parsed) or self._source.name
         items = parsed.get("entries") or []
 
         # feedparser sets `bozo` for anything from a stray ampersand to
@@ -128,6 +129,7 @@ class GenericRSSAdapter:
             published_at=_entry_published(item),
             author=_first_string(item, "author"),
             summary=_first_string(item, "summary", "description"),
+            origin_name=getattr(self, "_origin_name", None) or self._source.name,
         )
 
 
@@ -153,6 +155,11 @@ def _max_entries(source: Source) -> int:
 
 def _has_header(headers: dict[str, str], name: str) -> bool:
     return any(key.lower() == name for key in headers)
+
+
+def _channel_title(parsed: Any) -> str | None:
+    title = (parsed.get("feed") or {}).get("title")
+    return title.strip() if isinstance(title, str) and title.strip() else None
 
 
 def _feed_base_url(parsed: Any, fallback: str) -> str:

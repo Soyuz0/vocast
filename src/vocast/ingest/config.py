@@ -13,6 +13,7 @@ Environment variable convention
     VOCAST_SERVER_PUBLIC_BASE_URL
     VOCAST_SERVER_FEED_TOKEN
     VOCAST_SERVER_AUDIO_BASE_URL
+    VOCAST_SERVER_FEED_MAX_ITEMS
     VOCAST_DATABASE_PATH
     VOCAST_STORAGE_LIBRARY_PATH
     VOCAST_STORAGE_REQUIRE_MARKER
@@ -74,6 +75,10 @@ class ServerConfig:
     #: feed be published on a public endpoint while the audio it points at stays
     #: on a private network, so only titles ever leave.
     audio_base_url: str | None = None
+    #: Most recent episodes to include in a feed. Podcast clients neither want
+    #: nor reliably handle tens of thousands of items, and every item costs a
+    #: metadata read. None means no limit.
+    feed_max_items: int | None = 300
 
 
 @dataclass(frozen=True)
@@ -259,6 +264,11 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
             public_base_url=_clean_base_url(server.get("public_base_url")),
             feed_token=_as_optional_str(server.get("feed_token")),
             audio_base_url=_clean_base_url(server.get("audio_base_url")),
+            feed_max_items=_as_optional_int(
+                server.get("feed_max_items"),
+                ServerConfig.feed_max_items,
+                "server.feed_max_items",
+            ),
         ),
         database=DatabaseConfig(
             path=Path(str(database.get("path", DatabaseConfig.path))).expanduser()
@@ -395,6 +405,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_SERVER_PUBLIC_BASE_URL", "server", "public_base_url", "base_url"),
     ("VOCAST_SERVER_FEED_TOKEN", "server", "feed_token", "opt_str"),
     ("VOCAST_SERVER_AUDIO_BASE_URL", "server", "audio_base_url", "base_url"),
+    ("VOCAST_SERVER_FEED_MAX_ITEMS", "server", "feed_max_items", "opt_int"),
     ("VOCAST_DATABASE_PATH", "database", "path", "path"),
     ("VOCAST_STORAGE_LIBRARY_PATH", "storage", "library_path", "path"),
     ("VOCAST_STORAGE_REQUIRE_MARKER", "storage", "require_marker", "bool"),

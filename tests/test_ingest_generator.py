@@ -318,3 +318,32 @@ class _FakeResponse:
 
     def text(self) -> str:
         return "<html></html>"
+
+
+# --- article text ----------------------------------------------------------
+
+
+def test_narrated_text_is_stored_beside_the_audio(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """Feeds use it as show notes, so it has to outlive generation."""
+    _stub_extraction(monkeypatch, text=ARTICLE_TEXT)
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://example.com/a"
+    )
+
+    stored = library.get_entry(episode.episode_id)
+    assert stored.article_text().startswith("Sentence one.")
+
+
+def test_article_text_is_absent_for_older_episodes(lib: Path):
+    """Episodes generated before this existed must still render."""
+    from vocast.engines import AudioChunk
+
+    entry = library.add_entry(
+        title="No Text",
+        chunk=AudioChunk(np.zeros(2400, dtype=np.float32), 24000),
+        voice="af_heart",
+        engine="kokoro",
+    )
+    assert library.get_entry(entry.id).article_text() is None

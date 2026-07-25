@@ -111,8 +111,15 @@ def _render_all(
         if state is not None and request is not None
         else None
     )
+    max_items = (
+        state.context.config.server.feed_max_items if state is not None else None
+    )
     episodes = collect_episodes(
-        entries, base_url=base_url, audio_base_url=audio_base, token=token
+        entries,
+        base_url=base_url,
+        audio_base_url=audio_base,
+        token=token,
+        max_items=max_items,
     )
     cover = with_token(f"{base_url}/cover.jpg", token) if _SHOW_COVER else None
     return build_podcast_rss(

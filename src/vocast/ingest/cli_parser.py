@@ -29,6 +29,7 @@ def register_parsers(sub: argparse._SubParsersAction) -> None:
     _register_entry(sub)
     _register_runtime(sub)
     _register_retention(sub)
+    _register_backfill(sub)
     _register_config(sub)
 
 
@@ -147,6 +148,11 @@ def _register_runtime(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="respect poll intervals instead of fetching immediately",
     )
+    poll.add_argument(
+        "--full",
+        action="store_true",
+        help="walk the whole upstream backlog instead of stopping at known articles",
+    )
     _add_common(poll)
     poll.set_defaults(func=cmd_poll)
 
@@ -199,6 +205,21 @@ def _register_retention(sub: argparse._SubParsersAction) -> None:
     )
     _add_common(apply_now)
     apply_now.set_defaults(func=cmd_retention_apply)
+
+
+def _register_backfill(sub: argparse._SubParsersAction) -> None:
+    from .runtime_commands import cmd_backfill_text
+
+    parser = sub.add_parser(
+        "backfill-text",
+        help="re-extract article text for episodes made before it was stored",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, metavar="N", help="stop after N episodes"
+    )
+    parser.add_argument("--quiet", action="store_true")
+    _add_common(parser)
+    parser.set_defaults(func=cmd_backfill_text)
 
 
 def _register_config(sub: argparse._SubParsersAction) -> None:

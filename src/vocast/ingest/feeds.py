@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from email.utils import format_datetime
 from xml.sax.saxutils import escape, quoteattr
 
-from ..library import LibraryEntry, list_entries
+from ..library import LibraryEntry, get_entry, list_entries
 from .repository import EntryRepository, PublishedEpisode
 
 AUDIO_MIME_TYPE = "audio/mpeg"
@@ -42,8 +42,10 @@ class FeedEpisode:
     duration_seconds: float | None = None
     article_url: str | None = None
     source_name: str | None = None
-    original_published_at: datetime | None = None
-    summary: str | None = None
+    #: The upstream publication, used to prefix the episode title.
+    origin_name: str | None = None
+    #: The narrated text, used as show notes.
+    article_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,30 +63,42 @@ def collect_episodes(
     source_id: int | None = None,
     audio_base_url: str | None = None,
     token: str | None = None,
+    max_items: int | None = None,
 ) -> list[FeedEpisode]:
-    """Assemble feed items, newest first.
+    """Assemble feed items, newest published first.
 
-    With source_id set, only that source's episodes are returned. Otherwise
-    every library entry is included, whether it came from a feed or from
-    `vocast add`.
+    Driven by the database rather than by scanning the library: with thousands
+    of episodes on a network share, reading every meta.json per request costs
+    seconds to minutes. Only the entries actually rendered are read.
 
-    audio_base_url points enclosures somewhere other than the feed's own host,
-    so a publicly published feed can reference audio that stays private. token
-    is appended to enclosure URLs, since a podcast client can only authenticate
-    by URL.
+    max_items caps the feed. Podcast clients do not want, and often cannot
+    handle, tens of thousands of items -- especially with article text inlined.
     """
-    provenance = _provenance_by_episode(entries, source_id=source_id)
-
-    if source_id is not None:
-        library_entries = _library_entries_for(provenance)
-    else:
-        library_entries = list_entries()
-
     audio_base = audio_base_url or base_url
+    provenance = _provenance_by_episode(entries, source_id=source_id, limit=max_items)
+
     episodes: list[FeedEpisode] = []
-    for entry in library_entries:
-        details = provenance.get(entry.id)
+    seen: set[str] = set()
+
+    for details in provenance:
+        entry = get_entry(details.episode_id)
+        if entry is None:
+            # Audio was removed from the library but the row still points at it.
+            continue
+        seen.add(entry.id)
         episodes.append(_to_feed_episode(entry, details, audio_base, token=token))
+
+    if source_id is None:
+        # Episodes added by hand have no database row, so they still need a
+        # library scan -- bounded by the same cap.
+        for entry in list_entries(limit=max_items):
+            if entry.id in seen:
+                continue
+            episodes.append(_to_feed_episode(entry, None, audio_base, token=token))
+
+    episodes.sort(key=lambda e: e.published_at, reverse=True)
+    if max_items is not None:
+        return episodes[:max_items]
     return episodes
 
 
@@ -96,22 +110,11 @@ def library_entries_to_episodes(
 
 
 def _provenance_by_episode(
-    entries: EntryRepository | None, *, source_id: int | None
-) -> dict[str, PublishedEpisode]:
+    entries: EntryRepository | None, *, source_id: int | None, limit: int | None
+) -> list[PublishedEpisode]:
     if entries is None:
-        return {}
-    return {e.episode_id: e for e in entries.published_episodes(source_id=source_id)}
-
-
-def _library_entries_for(
-    provenance: dict[str, PublishedEpisode],
-) -> list[LibraryEntry]:
-    """Look up only the library entries named by a source's episodes.
-
-    Ordering follows list_entries() (newest synthesis first) so a per-source
-    feed and the combined feed agree on relative order.
-    """
-    return [entry for entry in list_entries() if entry.id in provenance]
+        return []
+    return entries.published_episodes(source_id=source_id, limit=limit)
 
 
 def _to_feed_episode(
@@ -128,24 +131,34 @@ def _to_feed_episode(
         title=entry.title,
         audio_url=with_token(f"{base_url}/audio/{entry.id}.mp3", token),
         size_bytes=size,
-        published_at=_synthesized_at(entry),
+        published_at=_publication_date(entry, details),
         duration_seconds=entry.duration_seconds,
         # For a manually added episode the library's `source` field is the
         # article URL, so it serves the same purpose as feed provenance.
         article_url=(details.article_url if details else entry.source),
         source_name=details.source_name if details else None,
-        original_published_at=details.published_at if details else None,
-        summary=details.summary if details else None,
+        origin_name=details.origin_name if details else None,
+        article_text=entry.article_text(),
     )
 
 
-def _synthesized_at(entry: LibraryEntry) -> datetime:
-    """When the episode became available.
+def _publication_date(
+    entry: LibraryEntry, details: PublishedEpisode | None
+) -> datetime:
+    """The article's own publication date, falling back to synthesis time.
 
-    This, not the article's own date, is the item's pubDate: it keeps ordering
-    identical to the original vocast feed and means a freshly generated episode
-    from an old article still shows up as new in a podcast client.
+    Using the real date means a podcast client orders episodes the way the
+    articles were actually published. The trade-off is that narrating an old
+    article does not surface it as new; synthesis time is only used when the
+    feed gave no date at all.
     """
+    if details is not None and details.published_at is not None:
+        return details.published_at
+    return _synthesized_at(entry)
+
+
+def _synthesized_at(entry: LibraryEntry) -> datetime:
+    """When the audio was produced."""
     try:
         parsed = datetime.fromisoformat(entry.synthesized_at)
     except (ValueError, TypeError):
@@ -155,27 +168,30 @@ def _synthesized_at(entry: LibraryEntry) -> datetime:
     return parsed
 
 
+def episode_title(episode: FeedEpisode) -> str:
+    """`{publication} - {article title}`, when the publication is known.
+
+    A feed aggregating many publications is hard to scan otherwise. The prefix
+    is skipped when the title already begins with it, to avoid "Foo - Foo: bar".
+    """
+    origin = episode.origin_name
+    if not origin or episode.title.lower().startswith(origin.lower()):
+        return episode.title
+    return f"{origin} - {episode.title}"
+
+
 def episode_description(episode: FeedEpisode) -> str:
-    """Human-readable notes: provenance, original date, and a link back."""
+    """The narrated article text as show notes, plus a link to the original.
+
+    Clients display this while playing, so it doubles as a transcript of what
+    is being read aloud.
+    """
     paragraphs: list[str] = []
-
-    provenance: list[str] = []
-    if episode.source_name:
-        provenance.append(f"From {episode.source_name}.")
-    if episode.original_published_at is not None:
-        provenance.append(
-            f"Originally published {episode.original_published_at.date().isoformat()}."
-        )
-    if provenance:
-        paragraphs.append(" ".join(provenance))
-
-    if episode.summary:
-        paragraphs.append(episode.summary)
+    if episode.article_text:
+        paragraphs.append(episode.article_text.strip())
     if episode.article_url:
         paragraphs.append(f"Read the original: {episode.article_url}")
-
-    # Blank lines only ever separate paragraphs, never lead or trail.
-    return "\n\n".join(paragraphs) if paragraphs else episode.title
+    return "\n\n".join(p for p in paragraphs if p) or episode.title
 
 
 def build_podcast_rss(channel: FeedChannel, episodes: list[FeedEpisode]) -> str:
@@ -219,7 +235,7 @@ def _render_channel_image(channel: FeedChannel) -> str:
 def _render_item(episode: FeedEpisode) -> str:
     parts = [
         "    <item>",
-        f"      <title>{escape(episode.title)}</title>",
+        f"      <title>{escape(episode_title(episode))}</title>",
         f"      <description>{escape(episode_description(episode))}</description>",
         f'      <guid isPermaLink="false">{escape(episode.episode_id)}</guid>',
         f"      <pubDate>{format_datetime(episode.published_at)}</pubDate>",
@@ -230,14 +246,13 @@ def _render_item(episode: FeedEpisode) -> str:
     ]
     if episode.article_url:
         parts.append(f"      <link>{escape(episode.article_url)}</link>")
-    if episode.source_name:
+    author = episode.origin_name or episode.source_name
+    if author:
         # itunes:author is where podcast clients surface provenance. RSS's own
         # <source> is deliberately not used: it means "the channel this item
         # came from" and requires that channel's feed URL, which we do not
         # republish.
-        parts.append(
-            f"      <itunes:author>{escape(episode.source_name)}</itunes:author>"
-        )
+        parts.append(f"      <itunes:author>{escape(author)}</itunes:author>")
     if episode.duration_seconds is not None:
         parts.append(
             f"      <itunes:duration>{int(episode.duration_seconds)}</itunes:duration>"

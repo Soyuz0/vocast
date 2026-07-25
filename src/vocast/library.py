@@ -67,6 +67,24 @@ class LibraryEntry:
     def meta_path(self) -> Path:
         return self.dir() / "meta.json"
 
+    def article_path(self) -> Path:
+        """The narrated text, stored so feeds can use it as show notes.
+
+        Kept out of meta.json deliberately: rendering a feed reads every
+        entry's metadata, and inlining article bodies there would make that
+        scan orders of magnitude more expensive.
+        """
+        return self.dir() / "article.txt"
+
+    def article_text(self) -> str | None:
+        path = self.article_path()
+        if not path.exists():
+            return None
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
     @property
     def short_id(self) -> str:
         """Trailing hex token of the id — a stable, human-friendly handle."""
@@ -130,6 +148,7 @@ def add_entry(
     source: str | None = None,
     cover_url: str | None = None,
     mp3_bitrate: str = "96k",
+    article_text: str | None = None,
 ) -> LibraryEntry:
     entry_id = _make_id(title)
     entry_dir = LIBRARY_PATH / entry_id
@@ -152,14 +171,25 @@ def add_entry(
         cover_url=cover_url,
     )
     (entry_dir / "meta.json").write_text(json.dumps(asdict(entry), indent=2))
+    if article_text:
+        (entry_dir / "article.txt").write_text(article_text, encoding="utf-8")
     return entry
 
 
-def list_entries() -> list[LibraryEntry]:
+def list_entries(limit: int | None = None) -> list[LibraryEntry]:
+    """Newest first. `limit` stops early instead of reading the whole library.
+
+    Entry ids begin with a UTC timestamp, so reverse directory order is already
+    newest-first and the limit can be applied before any metadata is read --
+    which matters when the library holds thousands of episodes on a network
+    share.
+    """
     if not LIBRARY_PATH.exists():
         return []
     entries: list[LibraryEntry] = []
     for child in sorted(LIBRARY_PATH.iterdir(), reverse=True):
+        if limit is not None and len(entries) >= limit:
+            break
         meta = child / "meta.json"
         if meta.exists():
             entries.append(LibraryEntry(**json.loads(meta.read_text())))

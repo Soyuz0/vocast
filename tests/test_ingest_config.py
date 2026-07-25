@@ -353,3 +353,32 @@ def test_marker_requirement_passes_once_the_share_is_mounted(tmp_path: Path):
     target.mkdir()
     (target / STORAGE_MARKER).touch()
     verify_storage(StorageConfig(library_path=target, require_marker=True))
+
+
+def test_config_show_reports_whether_the_feed_is_protected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Operators need to verify protection without the secret being printed."""
+    import argparse
+    import json
+
+    from vocast.ingest.cli_commands import cmd_config_show
+
+    config = _write(tmp_path, "server:\n  feed_token: sup3r-s3cret\n")
+    cmd_config_show(argparse.Namespace(config=str(config)))
+
+    rendered = json.loads(capsys.readouterr().out)
+    assert rendered["server"]["feed_token"] == "<set>"
+    assert "sup3r-s3cret" not in json.dumps(rendered)
+
+
+def test_config_show_reports_an_unprotected_feed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    import argparse
+    import json
+
+    from vocast.ingest.cli_commands import cmd_config_show
+
+    cmd_config_show(argparse.Namespace(config=str(_write(tmp_path, ""))))
+    assert json.loads(capsys.readouterr().out)["server"]["feed_token"] is None

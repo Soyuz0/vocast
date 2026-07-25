@@ -230,6 +230,7 @@ class FreshRSSAPIAdapter:
             published_at=_published(item),
             author=_clean(item.get("author")),
             summary=_summary(item),
+            origin_name=_origin_name(item),
         )
 
     def _base(self) -> str:
@@ -250,6 +251,18 @@ def _alternate_href(item: dict[str, Any]) -> str | None:
                 href = link.get("href")
                 if isinstance(href, str) and href.startswith(("http://", "https://")):
                     return href
+    return None
+
+
+def _origin_name(item: dict[str, Any]) -> str | None:
+    """The upstream feed's title, e.g. the publication name.
+
+    FreshRSS aggregates many feeds into one stream, so this is what identifies
+    an article's actual publisher.
+    """
+    origin = item.get("origin")
+    if isinstance(origin, dict):
+        return _clean(origin.get("title"))
     return None
 
 

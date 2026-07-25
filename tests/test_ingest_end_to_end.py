@@ -155,7 +155,7 @@ def test_feed_url_becomes_a_playable_episode(
     combined = client.get("/feeds/all.xml")
     assert combined.status_code == 200
     [item] = _items(combined.text)
-    assert item.find("title").text == "The Bitter Lesson"
+    assert item.find("title").text == "Example Blog - The Bitter Lesson"
     assert item.find("link").text == "https://example.com/bitter-lesson"
 
     per_source = client.get(f"/feeds/source/{source.id}.xml")
@@ -230,7 +230,10 @@ def test_newly_published_article_becomes_a_second_episode(
 
     client = TestClient(create_app(ServiceState(context=context)))
     titles = {i.find("title").text for i in _items(client.get("/feeds/all.xml").text)}
-    assert titles == {"The Bitter Lesson", "Why RSS Still Matters"}
+    assert titles == {
+        "Example Blog - The Bitter Lesson",
+        "Example Blog - Why RSS Still Matters",
+    }
 
 
 def test_transient_failure_is_retried_then_succeeds(
@@ -341,5 +344,5 @@ def test_manual_add_still_works_alongside_ingestion(
 
     client = TestClient(create_app(ServiceState(context=context)))
     titles = {i.find("title").text for i in _items(client.get("/feeds/all.xml").text)}
-    assert titles == {"The Bitter Lesson", "Hand Added"}
+    assert titles == {"Example Blog - The Bitter Lesson", "Hand Added"}
     assert client.get(f"/audio/{manual.id}.mp3").status_code == 200

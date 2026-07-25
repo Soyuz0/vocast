@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
 
 from vocast import library
+from vocast.ingest import feeds as feeds_module
 from vocast.ingest.db import Database, open_database
 from vocast.ingest.feeds import FeedChannel, build_podcast_rss, collect_episodes
 from vocast.ingest.models import FeedEntry
@@ -51,10 +52,13 @@ def _make_episode(
     synthesized_at: str = "2026-06-04T12:00:00+00:00",
     source: str | None = None,
     audio: bytes = b"fake-mp3-bytes",
+    article_text: str | None = None,
 ) -> None:
     entry_dir = lib / episode_id
     entry_dir.mkdir(parents=True)
     (entry_dir / "audio.mp3").write_bytes(audio)
+    if article_text:
+        (entry_dir / "article.txt").write_text(article_text, encoding="utf-8")
     (entry_dir / "meta.json").write_text(
         json.dumps(
             {
@@ -79,6 +83,7 @@ def _queue_ready(
     guid: str = "g",
     article_url: str = "https://example.com/article",
     published_at=None,
+    origin_name: str | None = None,
 ) -> int:
     source = sources.find_by_url(
         kind="rss", url=f"https://example.com/{source_name}/feed.xml"
@@ -91,7 +96,8 @@ def _queue_ready(
             external_guid=guid,
             title=f"Article {guid}",
             article_url=article_url,
-            published_at=published_at or utcnow(),
+            published_at=published_at,
+            origin_name=origin_name or source_name,
         )
     )
     entries.mark_ready(entry.id, episode_id=episode_id)
@@ -145,7 +151,7 @@ def test_item_has_every_required_element(
 
     [item] = _items(_render(entries))
 
-    assert item.find("title").text == "Alpha"
+    assert item.find("title").text == "Tech - Alpha"
     assert item.find("description").text
     assert item.find("guid").text == "20260604T120000Z_a_aaa111"
     assert item.find("pubDate").text
@@ -222,7 +228,7 @@ def test_guid_does_not_change_when_metadata_changes(
 
     item = _items(_render(entries))[0]
     assert item.find("guid").text == before
-    assert item.find("title").text == "Renamed Title"
+    assert item.find("title").text == "Tech - Renamed Title"
 
 
 # --- ordering --------------------------------------------------------------
@@ -271,7 +277,7 @@ def test_source_feed_contains_only_that_sources_episodes(
     )
 
     titles = [i.find("title").text for i in _items(_render(entries, source_id=tech_id))]
-    assert titles == ["From Tech"]
+    assert titles == ["Tech - From Tech"]
 
 
 def test_combined_feed_includes_manual_and_ingested_episodes(
@@ -285,7 +291,7 @@ def test_combined_feed_includes_manual_and_ingested_episodes(
     )
 
     titles = {i.find("title").text for i in _items(_render(entries))}
-    assert titles == {"Manually Added", "From A Feed"}
+    assert titles == {"Manually Added", "Tech - From A Feed"}
 
 
 def test_source_feed_excludes_manual_episodes(
@@ -298,7 +304,7 @@ def test_source_feed_excludes_manual_episodes(
     )
 
     titles = [i.find("title").text for i in _items(_render(entries, source_id=tech_id))]
-    assert titles == ["From A Feed"]
+    assert titles == ["Tech - From A Feed"]
 
 
 def test_episode_not_yet_generated_is_absent_from_the_feed(
@@ -372,10 +378,16 @@ def test_control_characters_in_a_title_do_not_produce_invalid_xml(
 # --- description -----------------------------------------------------------
 
 
-def test_description_names_the_source_and_links_the_original(
+def test_description_carries_the_article_text_and_a_link(
     lib: Path, sources: SourceRepository, entries: EntryRepository
 ):
-    _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha")
+    """Show notes double as a transcript of what is read aloud."""
+    _make_episode(
+        lib,
+        "20260604T120000Z_a_aaa111",
+        "Alpha",
+        article_text="The full body of the article.",
+    )
     _queue_ready(
         sources,
         entries,
@@ -386,8 +398,10 @@ def test_description_names_the_source_and_links_the_original(
     )
 
     description = _items(_render(entries))[0].find("description").text
-    assert "Tech Weekly" in description
+    assert "The full body of the article." in description
     assert "https://example.com/alpha" in description
+    # Provenance moved to the title and itunes:author; it is not repeated here.
+    assert "Originally published" not in description
 
 
 def test_manual_episode_description_falls_back_to_its_source_url(
@@ -430,3 +444,195 @@ def test_description_falls_back_to_the_title_with_no_metadata(
 ):
     _make_episode(lib, "20260604T120000Z_a_aaa111", "Just A Title", source=None)
     assert _items(_render(entries))[0].find("description").text == "Just A Title"
+
+
+# --- title prefix ----------------------------------------------------------
+
+
+def test_title_is_prefixed_with_the_publication(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "A natural experiment")
+    _queue_ready(
+        sources,
+        entries,
+        source_name="FreshRSS Unreads",
+        episode_id="20260604T120000Z_a_aaa111",
+        origin_name="Marginal Revolution",
+    )
+
+    assert _items(_render(entries))[0].find("title").text == (
+        "Marginal Revolution - A natural experiment"
+    )
+
+
+def test_itunes_author_is_the_publication_not_the_source(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha")
+    _queue_ready(
+        sources,
+        entries,
+        source_name="FreshRSS Unreads",
+        episode_id="20260604T120000Z_a_aaa111",
+        origin_name="LessWrong",
+    )
+
+    item = _items(_render(entries))[0]
+    assert item.find(f"{{{ITUNES_NS}}}author").text == "LessWrong"
+
+
+def test_prefix_is_skipped_when_the_title_already_starts_with_it(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """Avoids "SMBC - SMBC: Legos"."""
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "SMBC: Legos")
+    _queue_ready(
+        sources,
+        entries,
+        source_name="S",
+        episode_id="20260604T120000Z_a_aaa111",
+        origin_name="SMBC",
+    )
+
+    assert _items(_render(entries))[0].find("title").text == "SMBC: Legos"
+
+
+def test_title_is_unprefixed_without_a_known_publication(
+    lib: Path, entries: EntryRepository
+):
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Hand Added")
+    assert _items(_render(entries))[0].find("title").text == "Hand Added"
+
+
+# --- publication date ------------------------------------------------------
+
+
+def test_pubdate_is_the_articles_own_publication_date(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """Not the synthesis time, so clients order by when articles came out."""
+    _make_episode(
+        lib,
+        "20260604T120000Z_a_aaa111",
+        "Alpha",
+        synthesized_at="2026-06-04T12:00:00+00:00",
+    )
+    _queue_ready(
+        sources,
+        entries,
+        source_name="Tech",
+        episode_id="20260604T120000Z_a_aaa111",
+        published_at=datetime(2022, 9, 25, 8, 0, tzinfo=timezone.utc),
+    )
+
+    assert "2022" in _items(_render(entries))[0].find("pubDate").text
+
+
+def test_pubdate_falls_back_to_synthesis_time_without_a_date(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    _make_episode(
+        lib,
+        "20260604T120000Z_a_aaa111",
+        "Alpha",
+        synthesized_at="2026-06-04T12:00:00+00:00",
+    )
+    _queue_ready(
+        sources,
+        entries,
+        source_name="Tech",
+        episode_id="20260604T120000Z_a_aaa111",
+        published_at=None,
+    )
+
+    assert "2026" in _items(_render(entries))[0].find("pubDate").text
+
+
+def test_feed_is_ordered_by_publication_date(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """A recently narrated old article must not jump to the top."""
+    _make_episode(lib, "20260605T120000Z_b_bbb222", "Old Article")
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "New Article")
+    _queue_ready(
+        sources,
+        entries,
+        source_name="Tech",
+        episode_id="20260605T120000Z_b_bbb222",
+        guid="old",
+        published_at=datetime(2022, 1, 1, tzinfo=timezone.utc),
+    )
+    _queue_ready(
+        sources,
+        entries,
+        source_name="Tech",
+        episode_id="20260604T120000Z_a_aaa111",
+        guid="new",
+        published_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+    )
+
+    titles = [i.find("title").text for i in _items(_render(entries))]
+    assert titles == ["Tech - New Article", "Tech - Old Article"]
+
+
+# --- item cap --------------------------------------------------------------
+
+
+def test_feed_is_capped_to_max_items(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """Clients cannot handle tens of thousands of items, and each costs a read."""
+    for index in range(8):
+        episode_id = f"2026060{index}T120000Z_ep_{index}"
+        _make_episode(lib, episode_id, f"Episode {index}")
+        _queue_ready(
+            sources,
+            entries,
+            source_name="Tech",
+            episode_id=episode_id,
+            guid=f"g{index}",
+            published_at=datetime(2026, 6, index + 1, tzinfo=timezone.utc),
+        )
+
+    episodes = collect_episodes(entries, base_url=BASE, max_items=3)
+    assert len(episodes) == 3
+    # The newest by publication date survive the cap.
+    assert [e.title for e in episodes] == ["Episode 7", "Episode 6", "Episode 5"]
+
+
+def test_uncapped_feed_returns_everything(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    for index in range(4):
+        episode_id = f"2026060{index}T120000Z_ep_{index}"
+        _make_episode(lib, episode_id, f"Episode {index}")
+        _queue_ready(
+            sources, entries, source_name="T", episode_id=episode_id, guid=f"g{index}"
+        )
+
+    assert len(collect_episodes(entries, base_url=BASE, max_items=None)) == 4
+
+
+def test_capped_feed_only_reads_the_metadata_it_needs(
+    lib: Path, sources: SourceRepository, entries: EntryRepository, monkeypatch
+):
+    """The cost of a feed must not scale with total library size."""
+    for index in range(10):
+        episode_id = f"2026060{index}T120000Z_ep_{index}"
+        _make_episode(lib, episode_id, f"Episode {index}")
+        _queue_ready(
+            sources, entries, source_name="T", episode_id=episode_id, guid=f"g{index}"
+        )
+
+    reads: list[str] = []
+    original = feeds_module.get_entry
+
+    def counting_get_entry(entry_id: str):
+        reads.append(entry_id)
+        return original(entry_id)
+
+    monkeypatch.setattr(feeds_module, "get_entry", counting_get_entry)
+    collect_episodes(entries, base_url=BASE, max_items=2)
+
+    assert len(reads) == 2

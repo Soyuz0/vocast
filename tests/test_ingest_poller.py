@@ -243,3 +243,28 @@ def test_source_is_not_polled_twice_concurrently(
     poller.poll_source(source)
 
     assert reentered == [True]
+
+
+def test_full_poll_disables_the_adapter_early_stop(
+    sources: SourceRepository, entries: EntryRepository
+):
+    """Needed to re-read metadata for articles already recorded."""
+    source = _add_source(sources, "one")
+    seen_kwargs: list[object] = []
+
+    class RecordingAdapter:
+        def __init__(self, src: Source, **kwargs: object) -> None:
+            self.source = src
+            seen_kwargs.append(kwargs.get("known_guids"))
+
+        def fetch_entries(self) -> list[FeedEntry]:
+            return []
+
+    poller = Poller(
+        sources=sources, entries=entries, adapter_factory=RecordingAdapter
+    )
+    poller.poll_source(source)
+    poller.poll_source(source, full=True)
+
+    assert seen_kwargs[0] is not None, "routine poll should allow early-stop"
+    assert seen_kwargs[1] is None, "full poll must disable early-stop"

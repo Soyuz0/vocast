@@ -132,6 +132,7 @@ def _render_feed(
         source_id=source_id,
         audio_base_url=state.audio_base_url(request),
         token=state.feed_token,
+        max_items=state.context.config.server.feed_max_items,
     )
     title = f"vocast — {source_name}" if source_name else "vocast"
     description = (

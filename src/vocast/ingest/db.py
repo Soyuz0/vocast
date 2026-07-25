@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -63,9 +63,16 @@ CREATE INDEX idx_entries_source ON entries(source_id);
 CREATE INDEX idx_entries_episode ON entries(vocast_episode_id);
 """
 
+# Records which upstream feed an article came from, so a combined feed can be
+# labelled per publisher. Nullable: rows predating this are backfilled on the
+# next poll, and not every source kind reports it.
+_SCHEMA_V2 = """
+ALTER TABLE entries ADD COLUMN origin_name TEXT;
+"""
+
 # Ordered (version, ddl) pairs applied in sequence. Append new migrations;
 # never edit a released one.
-_MIGRATIONS: list[tuple[int, str]] = [(1, _SCHEMA_V1)]
+_MIGRATIONS: list[tuple[int, str]] = [(1, _SCHEMA_V1), (2, _SCHEMA_V2)]
 
 
 class Database:

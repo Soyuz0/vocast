@@ -33,11 +33,14 @@ def cmd_poll(args: argparse.Namespace) -> int:
         if source is None:
             print(f"error: no source with id {args.source_id}", file=sys.stderr)
             return 1
-        results = [poller.poll_source(source)]
+        results = [poller.poll_source(source, full=args.full)]
     elif args.due_only:
         results = poller.poll_due().results
     else:
-        results = poller.poll_all().results
+        results = [
+            poller.poll_source(s, full=args.full)
+            for s in context.sources.all(enabled_only=True)
+        ]
 
     if not results:
         print("no sources to poll")
@@ -179,4 +182,50 @@ def cmd_retention_apply(args: argparse.Namespace) -> int:
         "note: podcast apps that already downloaded these episodes keep their "
         "local copies"
     )
+    return 0
+
+
+def cmd_backfill_text(args: argparse.Namespace) -> int:
+    """Re-extract article text for episodes generated before it was stored.
+
+    Only fetches and extracts; no synthesis happens, so this is cheap and safe
+    to re-run. Existing audio is never touched.
+    """
+    from .. import library
+    from ..fetch import fetch_article
+    from .nethttp import fetch as guarded_fetch
+
+    context = build_context(args)
+    policy = context.fetch_policy()
+
+    missing = [
+        entry
+        for entry in library.list_entries()
+        if entry.source and entry.article_text() is None
+    ]
+    if not missing:
+        print("every episode already has its article text")
+        return 0
+
+    print(f"{len(missing)} episode(s) missing article text")
+    if args.limit:
+        missing = missing[: args.limit]
+
+    filled = failed = 0
+    for entry in missing:
+        try:
+            _, text, _ = fetch_article(
+                entry.source,
+                html_fetcher=lambda url: guarded_fetch(url, policy=policy).text(),
+            )
+        except Exception as exc:  # noqa: BLE001 - report and continue
+            failed += 1
+            print(f"  ! {entry.short_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
+        entry.article_path().write_text(text, encoding="utf-8")
+        filled += 1
+        if not args.quiet:
+            print(f"  + {entry.short_id}  {entry.title[:56]}")
+
+    print(f"\nfilled {filled}, failed {failed}")
     return 0

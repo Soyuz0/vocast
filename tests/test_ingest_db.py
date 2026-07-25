@@ -446,3 +446,84 @@ def test_expire_keeps_dedup_row_so_article_is_not_regenerated(
     assert entries.published_episodes() == []
     assert entries.insert_if_new(_feed_entry(source.id, "a")) is None
     assert entries.get(entry.id).status is EntryStatus.EXPIRED
+
+
+# --- migration v1 -> v2 ----------------------------------------------------
+
+
+def test_v1_database_is_upgraded_without_losing_data(tmp_path: Path):
+    """An existing deployment must gain origin_name, not be recreated."""
+    path = tmp_path / "state.db"
+    from vocast.ingest.db import _SCHEMA_V1
+
+    with sqlite3.connect(path) as raw:
+        raw.executescript(_SCHEMA_V1)
+        raw.execute("PRAGMA user_version=1")
+        raw.execute(
+            "INSERT INTO sources (name, kind, url, enabled, poll_interval_minutes,"
+            " created_at, updated_at) VALUES ('Old','rss','https://e.com/f',1,15,'t','t')"
+        )
+        raw.execute(
+            "INSERT INTO entries (source_id, external_guid, article_url, title,"
+            " status, retry_count, created_at, updated_at)"
+            " VALUES (1,'g','https://e.com/a','Kept','ready',0,'t','t')"
+        )
+
+    db = open_database(path)
+    assert db.migrate() == SCHEMA_VERSION
+
+    [entry] = EntryRepository(db).all()
+    assert entry.title == "Kept"
+    assert entry.origin_name is None
+
+
+def test_origin_name_round_trips(sources: SourceRepository, entries: EntryRepository):
+    source = _add_source(sources)
+    entry = entries.insert_if_new(
+        _feed_entry(source.id, "a", origin_name="Marginal Revolution")
+    )
+    assert entries.get(entry.id).origin_name == "Marginal Revolution"
+
+
+def test_backfill_origin_labels_rows_recorded_without_one(
+    sources: SourceRepository, entries: EntryRepository
+):
+    source = _add_source(sources)
+    entry = entries.insert_if_new(_feed_entry(source.id, "a"))
+    assert entries.get(entry.id).origin_name is None
+
+    updated = entries.backfill_origin(
+        source.id, [_feed_entry(source.id, "a", origin_name="LessWrong")]
+    )
+
+    assert updated == 1
+    assert entries.get(entry.id).origin_name == "LessWrong"
+
+
+def test_backfill_origin_does_not_overwrite_an_existing_name(
+    sources: SourceRepository, entries: EntryRepository
+):
+    source = _add_source(sources)
+    entry = entries.insert_if_new(_feed_entry(source.id, "a", origin_name="Original"))
+
+    entries.backfill_origin(
+        source.id, [_feed_entry(source.id, "a", origin_name="Different")]
+    )
+
+    assert entries.get(entry.id).origin_name == "Original"
+
+
+def test_published_episodes_can_be_limited(
+    sources: SourceRepository, entries: EntryRepository
+):
+    source = _add_source(sources)
+    for index in range(5):
+        entry = entries.insert_if_new(
+            _feed_entry(
+                source.id, f"g{index}", published_at=utcnow() - timedelta(days=index)
+            )
+        )
+        entries.mark_ready(entry.id, episode_id=f"ep-{index}")
+
+    limited = entries.published_episodes(limit=2)
+    assert [e.episode_id for e in limited] == ["ep-0", "ep-1"]

@@ -87,11 +87,16 @@ class Poller:
             report.results.append(self.poll_source(source))
         return report
 
-    def poll_source(self, source: Source) -> SourcePollResult:
+    def poll_source(self, source: Source, *, full: bool = False) -> SourcePollResult:
         """Fetch one source and insert whatever is new.
 
         Never raises: a single misbehaving source must not stop the others, so
         every failure is recorded on the source row and returned in the result.
+
+        `full` disables the adapter's early-stop, forcing a complete walk of the
+        upstream backlog. Routine polls stop as soon as they reach known
+        articles, which is what keeps them cheap, but a full pass is needed to
+        re-read metadata for articles recorded earlier.
         """
         result = SourcePollResult(source_id=source.id, source_name=source.name)
         if not self._begin(source.id):
@@ -102,19 +107,24 @@ class Poller:
             )
             return result
         try:
-            self._poll_locked(source, result)
+            self._poll_locked(source, result, full=full)
         finally:
             self._end(source.id)
         return result
 
     # -- internals ---------------------------------------------------------
 
-    def _poll_locked(self, source: Source, result: SourcePollResult) -> None:
+    def _poll_locked(
+        self, source: Source, result: SourcePollResult, *, full: bool = False
+    ) -> None:
         try:
+            known = (
+                None
+                if full
+                else functools.partial(self._entries.known_guids, source.id)
+            )
             adapter = self._adapter_factory(
-                source,
-                policy=self._policy,
-                known_guids=functools.partial(self._entries.known_guids, source.id),
+                source, policy=self._policy, known_guids=known
             )
             discovered = adapter.fetch_entries()
         # Adapters wrap third-party parsers and sockets, so the failure surface
@@ -136,6 +146,12 @@ class Poller:
             return
 
         result.discovered = len(discovered)
+        # Rows recorded before origin_name existed are labelled here rather
+        # than requiring the backlog to be re-discovered.
+        try:
+            self._entries.backfill_origin(source.id, discovered)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("origin backfill failed %s", kv(source_id=source.id, error=exc))
         for feed_entry in discovered:
             inserted = self._insert(source, feed_entry)
             if inserted is not None:
