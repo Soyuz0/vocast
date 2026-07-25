@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -70,9 +70,24 @@ _SCHEMA_V2 = """
 ALTER TABLE entries ADD COLUMN origin_name TEXT;
 """
 
+# Runtime state that must survive a restart, such as whether narration is
+# paused. Kept in the database rather than a file so that a CLI invocation and
+# the running service always agree.
+_SCHEMA_V3 = """
+CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
 # Ordered (version, ddl) pairs applied in sequence. Append new migrations;
 # never edit a released one.
-_MIGRATIONS: list[tuple[int, str]] = [(1, _SCHEMA_V1), (2, _SCHEMA_V2)]
+_MIGRATIONS: list[tuple[int, str]] = [
+    (1, _SCHEMA_V1),
+    (2, _SCHEMA_V2),
+    (3, _SCHEMA_V3),
+]
 
 
 class Database:

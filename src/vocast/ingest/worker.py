@@ -7,7 +7,9 @@ external broker.
 
 from __future__ import annotations
 
+import os
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -15,6 +17,7 @@ from .config import WorkerConfig
 from .generator import (
     EpisodeGenerator,
     GeneratedEpisode,
+    GenerationCancelled,
     PermanentGenerationError,
     TransientGenerationError,
 )
@@ -111,6 +114,15 @@ class Worker:
             episode = self._generator.generate_from_url(
                 entry.article_url, title=entry.title, byline=entry.origin_name
             )
+        except GenerationCancelled as exc:
+            # Deliberate stop: requeue without counting an attempt, so pausing
+            # never pushes an article towards `failed`.
+            self._entries.requeue(entry.id, reset_retries=False)
+            log.info(
+                "generation cancelled, requeued %s",
+                kv(entry_id=entry.id, url=entry.article_url, reason=str(exc)),
+            )
+            return WorkOutcome(entry_id=entry.id, error=str(exc), retrying=True)
         except PermanentGenerationError as exc:
             return self._fail_permanently(entry, str(exc))
         except TransientGenerationError as exc:
@@ -213,10 +225,14 @@ class WorkerLoop:
         *,
         idle_seconds: float = 5.0,
         name: str = "vocast-worker",
+        is_paused: Callable[[], bool] | None = None,
+        nice: int = 0,
     ) -> None:
         self._worker = worker
         self._idle_seconds = idle_seconds
         self._name = name
+        self._is_paused = is_paused
+        self._nice = nice
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._busy = threading.Event()
@@ -251,9 +267,20 @@ class WorkerLoop:
             self._thread.join(timeout=timeout)
 
     def _run(self) -> None:
-        log.info("worker started %s", kv(name=self._name))
+        self._apply_nice()
+        log.info("worker started %s", kv(name=self._name, nice=self._nice or None))
         self._worker.reclaim_stale()
+        was_paused = False
         while not self._stop.is_set():
+            if self._paused():
+                if not was_paused:
+                    log.info("worker paused %s", kv(name=self._name))
+                    was_paused = True
+                self._stop.wait(self._idle_seconds)
+                continue
+            if was_paused:
+                log.info("worker resumed %s", kv(name=self._name))
+                was_paused = False
             try:
                 self._busy.set()
                 outcome = self._worker.process_next()
@@ -266,3 +293,26 @@ class WorkerLoop:
                 # Nothing due; wait, but wake immediately on shutdown.
                 self._stop.wait(self._idle_seconds)
         log.info("worker stopped %s", kv(name=self._name))
+
+    def _paused(self) -> bool:
+        if self._is_paused is None:
+            return False
+        try:
+            return self._is_paused()
+        except Exception:
+            log.exception("could not read the pause flag; continuing")
+            return False
+
+    def _apply_nice(self) -> None:
+        """Lower this thread's scheduling priority.
+
+        Synthesis is CPU-bound and will otherwise compete with interactive work.
+        On Linux nice(2) applies per-thread, so only the worker is deprioritized
+        and the HTTP server stays responsive.
+        """
+        if not self._nice:
+            return
+        try:
+            os.nice(self._nice)
+        except (OSError, AttributeError) as exc:
+            log.warning("could not lower worker priority %s", kv(error=exc))

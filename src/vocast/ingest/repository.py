@@ -627,3 +627,51 @@ def _is_due(source: Source, now: datetime) -> bool:
         return True
     interval = timedelta(minutes=max(1, source.poll_interval_minutes))
     return source.last_checked_at + interval <= now
+
+
+class SettingsRepository:
+    """Small key/value store for runtime state that outlives a restart.
+
+    Used for operator switches such as pausing narration: a `vocast` command and
+    the running service are separate processes, so the flag has to live where
+    both can see it.
+    """
+
+    WORKER_PAUSED = "worker_paused"
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        with self._db.reading() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+        return row["value"] if row else default
+
+    def set(self, key: str, value: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                               updated_at = excluded.updated_at
+                """,
+                (key, value, to_iso(utcnow())),
+            )
+
+    def get_bool(self, key: str, default: bool = False) -> bool:
+        raw = self.get(key)
+        if raw is None:
+            return default
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+
+    def set_bool(self, key: str, value: bool) -> None:
+        self.set(key, "true" if value else "false")
+
+    @property
+    def worker_paused(self) -> bool:
+        return self.get_bool(self.WORKER_PAUSED)
+
+    def pause_worker(self, paused: bool) -> None:
+        self.set_bool(self.WORKER_PAUSED, paused)

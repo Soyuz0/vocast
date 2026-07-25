@@ -5,6 +5,7 @@ The generator is stubbed throughout: no network, no model download, no speech.
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -403,3 +404,90 @@ def test_worker_passes_the_publication_as_the_byline(
     _worker(entries, generator).process_next()
 
     assert generator.bylines == ["Daring Fireball"]
+
+
+# --- pause / resume --------------------------------------------------------
+
+
+def test_paused_worker_claims_nothing(entries: EntryRepository, source_id: int):
+    from vocast.ingest.worker import WorkerLoop
+
+    _queue(entries, source_id, "a")
+    generator = StubGenerator()
+    loop = WorkerLoop(
+        _worker(entries, generator), idle_seconds=0.01, is_paused=lambda: True
+    )
+
+    loop.start()
+    time.sleep(0.2)
+    loop.stop(timeout=5)
+
+    assert generator.calls == []
+    assert entries.get(1).status is EntryStatus.PENDING
+
+
+def test_worker_resumes_when_the_flag_clears(entries: EntryRepository, source_id: int):
+    from vocast.ingest.worker import WorkerLoop
+
+    _queue(entries, source_id, "a")
+    generator = StubGenerator()
+    paused = {"value": True}
+    loop = WorkerLoop(
+        _worker(entries, generator),
+        idle_seconds=0.01,
+        is_paused=lambda: paused["value"],
+    )
+    loop.start()
+    time.sleep(0.1)
+    assert generator.calls == []
+
+    paused["value"] = False
+    for _ in range(100):
+        if generator.calls:
+            break
+        time.sleep(0.02)
+    loop.stop(timeout=5)
+
+    assert len(generator.calls) == 1
+
+
+def test_pause_flag_read_failure_does_not_wedge_the_worker(
+    entries: EntryRepository, source_id: int
+):
+    from vocast.ingest.worker import WorkerLoop
+
+    _queue(entries, source_id, "a")
+    generator = StubGenerator()
+
+    def exploding() -> bool:
+        raise RuntimeError("database unavailable")
+
+    loop = WorkerLoop(
+        _worker(entries, generator), idle_seconds=0.01, is_paused=exploding
+    )
+    loop.start()
+    for _ in range(100):
+        if generator.calls:
+            break
+        time.sleep(0.02)
+    loop.stop(timeout=5)
+
+    assert len(generator.calls) == 1, "a flag read failure must not stop work"
+
+
+def test_cancelled_generation_is_requeued_without_counting_an_attempt(
+    entries: EntryRepository, source_id: int
+):
+    """Pausing must never push an article towards `failed`."""
+    from vocast.ingest.generator import GenerationCancelled
+
+    entry = _queue(entries, source_id, "a")
+    generator = StubGenerator(results=[GenerationCancelled("paused")])
+
+    outcome = _worker(entries, generator).process_next()
+
+    assert outcome.retrying
+    stored = entries.get(entry.id)
+    assert stored.status is EntryStatus.PENDING
+    assert stored.retry_count == 0
+    assert stored.next_retry_at is None

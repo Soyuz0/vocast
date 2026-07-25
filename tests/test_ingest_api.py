@@ -476,3 +476,34 @@ def test_audio_base_url_defaults_to_the_feed_host(
     _make_episode(context.config.storage.library_path, "20260604T120000Z_a_aaa1", "A")
     body = client.get("/feeds/all.xml").text
     assert "https://podcast.example.com/audio/20260604T120000Z_a_aaa1.mp3" in body
+
+
+# --- pause / resume --------------------------------------------------------
+
+
+def test_worker_can_be_paused_and_resumed_over_http(
+    client: TestClient, context: AppContext
+):
+    assert client.post("/api/worker/pause").json()["worker_paused"] is True
+    assert context.settings.worker_paused is True
+
+    assert client.post("/api/worker/resume").json()["worker_paused"] is False
+    assert context.settings.worker_paused is False
+
+
+def test_health_reports_paused_distinctly_from_stopped(
+    state: ServiceState, client: TestClient
+):
+    state.worker_running = True
+    assert client.get("/api/health").json()["worker"] == "running"
+
+    client.post("/api/worker/pause")
+    payload = client.get("/api/health").json()
+    assert payload["worker"] == "paused"
+    assert payload["worker_paused"] is True
+
+
+def test_pause_requires_the_admin_token_when_configured(
+    guarded_client: TestClient,
+):
+    assert guarded_client.post("/api/worker/pause").status_code == 401

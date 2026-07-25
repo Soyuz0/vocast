@@ -289,3 +289,39 @@ def cmd_regenerate(args: argparse.Namespace) -> int:
 
     print(f"\nrequeued {requeued} article(s); the worker will narrate them again")
     return 0
+
+
+def cmd_pause(args: argparse.Namespace) -> int:
+    """Stop narrating. The episode in flight finishes; nothing new is claimed."""
+    context = build_context(args)
+    context.settings.pause_worker(True)
+    print("narration paused")
+    print("the episode already in progress will finish, then workers idle")
+    print("resume with: vocast resume")
+    return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    context = build_context(args)
+    context.settings.pause_worker(False)
+    print("narration resumed")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Show queue progress and whether narration is paused."""
+    context = build_context(args)
+    counts = context.entries.counts_by_status()
+    paused = context.settings.worker_paused
+
+    print(f"narration : {'PAUSED' if paused else 'running'}")
+    print(f"pending   : {counts.get('pending', 0)}")
+    print(f"processing: {counts.get('processing', 0)}")
+    print(f"ready     : {counts.get('ready', 0)}")
+    print(f"failed    : {counts.get('failed', 0)}")
+
+    done = counts.get("ready", 0) + counts.get("failed", 0)
+    total = sum(counts.values())
+    if total:
+        print(f"progress  : {done}/{total} ({100 * done / total:.1f}%)")
+    return 0

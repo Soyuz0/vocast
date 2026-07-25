@@ -59,8 +59,10 @@ class Service:
         self._worker_loops: list[WorkerLoop] = []
         self._with_poller = with_poller
         self._with_worker = with_worker
+        self._shutting_down = False
 
     def start(self) -> None:
+        self._shutting_down = False
         config = self.context.config
         if self._with_poller:
             poller = Poller(
@@ -95,7 +97,10 @@ class Service:
             # engines are not documented as thread-safe.
             for index in range(max(1, config.worker.concurrency)):
                 loop = WorkerLoop(
-                    self._build_worker(), name=f"vocast-worker-{index + 1}"
+                    self._build_worker(),
+                    name=f"vocast-worker-{index + 1}",
+                    is_paused=lambda: self.context.settings.worker_paused,
+                    nice=config.worker.nice,
                 )
                 loop.start()
                 self._worker_loops.append(loop)
@@ -125,6 +130,9 @@ class Service:
             engine_name=self.context.config.tts.engine,
             voice=self.context.config.tts.voice,
             policy=self.context.fetch_policy(),
+            # Checked between chunks, so pausing interrupts a long article
+            # instead of waiting out what can be hours of synthesis.
+            should_continue=self._keep_synthesizing,
         )
         return Worker(
             entries=self.context.entries,
@@ -132,8 +140,22 @@ class Service:
             config=self.context.config.worker,
         )
 
+    def _keep_synthesizing(self) -> bool:
+        """False once narration is paused or the service is shutting down."""
+        if self._shutting_down:
+            return False
+        try:
+            return not self.context.settings.worker_paused
+        except Exception:  # noqa: BLE001 - never abort work over a read error
+            return True
+
     def stop(self) -> None:
-        """Stop background work, letting an in-flight episode finish."""
+        """Stop background work, abandoning any in-progress synthesis.
+
+        Cancelled articles are requeued, so nothing is lost beyond the partial
+        audio, which is never written to disk.
+        """
+        self._shutting_down = True
         if self._poller_loop is not None:
             self._poller_loop.stop()
             self.state.poller_running = False

@@ -174,7 +174,8 @@ def _register_health(router: APIRouter, state: ServiceState) -> None:
         payload = {
             "status": "ok" if database_ok else "degraded",
             "database": "ok" if database_ok else "error",
-            "worker": "running" if state.worker_running else "stopped",
+            "worker": _worker_status(state),
+            "worker_paused": _paused(state),
             "poller": "running" if state.poller_running else "stopped",
             "sources": source_count,
             "entries": counts,
@@ -188,8 +189,32 @@ def _register_health(router: APIRouter, state: ServiceState) -> None:
 # --- admin API -------------------------------------------------------------
 
 
+def _worker_status(state: ServiceState) -> str:
+    if not state.worker_running:
+        return "stopped"
+    return "paused" if _paused(state) else "running"
+
+
+def _paused(state: ServiceState) -> bool:
+    try:
+        return state.context.settings.worker_paused
+    except Exception:  # noqa: BLE001 - health must never raise
+        return False
+
+
 def _register_admin(router: APIRouter, state: ServiceState) -> None:
     require_admin = _admin_guard(state)
+
+    @router.post("/api/worker/pause", dependencies=[Depends(require_admin)])
+    def pause_worker() -> JSONResponse:
+        """Stop claiming new articles. The one in flight still finishes."""
+        state.context.settings.pause_worker(True)
+        return JSONResponse({"worker_paused": True})
+
+    @router.post("/api/worker/resume", dependencies=[Depends(require_admin)])
+    def resume_worker() -> JSONResponse:
+        state.context.settings.pause_worker(False)
+        return JSONResponse({"worker_paused": False})
 
     @router.get("/api/sources", dependencies=[Depends(require_admin)])
     def list_sources() -> JSONResponse:

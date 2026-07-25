@@ -405,3 +405,35 @@ def test_generator_narrates_the_intro_and_records_it(
     assert "by Marginal Revolution." in engine.synthesized[0]
     stored = library.get_entry(episode.episode_id).article_text()
     assert stored.startswith("Feed Title.\n\nby Marginal Revolution.")
+
+
+# --- cancellation ----------------------------------------------------------
+
+
+def test_synthesis_stops_between_chunks_when_asked(
+    lib: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An unbounded article can take hours; pausing must not wait it out."""
+    from vocast.ingest.generator import GenerationCancelled
+
+    _stub_extraction(monkeypatch, text="Sentence one. " * 400)
+    engine = FakeEngine()
+    calls = {"n": 0}
+
+    def keep_going() -> bool:
+        calls["n"] += 1
+        return calls["n"] <= 1  # allow one chunk, then cancel
+
+    gen = VocastEpisodeGenerator(engine=engine, should_continue=keep_going)
+    with pytest.raises(GenerationCancelled):
+        gen.generate_from_url("https://example.com/a")
+
+    assert library.list_entries() == [], "no partial episode may be written"
+
+
+def test_uncancelled_generation_is_unaffected(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_extraction(monkeypatch)
+    gen = VocastEpisodeGenerator(engine=engine, should_continue=lambda: True)
+    assert gen.generate_from_url("https://example.com/a").episode_id

@@ -9,13 +9,14 @@ manual `vocast add` path and the automated path always produce identical audio.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
 from .. import library
 from ..engines import TTSEngine, get_engine
 from ..fetch import fetch_article
-from ..pipeline import synthesize_article
+from ..pipeline import SynthesisCancelled, synthesize_article
 from .logs import get_logger, kv
 from .nethttp import BlockedURLError, FetchError, FetchPolicy, fetch
 
@@ -82,6 +83,14 @@ class PermanentGenerationError(GenerationError):
     """Retrying cannot help: a 404, a blocked URL, or unusable content."""
 
 
+class GenerationCancelled(GenerationError):
+    """Generation was stopped deliberately, e.g. by pausing narration.
+
+    Not a failure: the article goes straight back on the queue with its retry
+    count untouched.
+    """
+
+
 class EpisodeGenerator(Protocol):
     def generate_from_url(
         self,
@@ -108,6 +117,7 @@ class VocastEpisodeGenerator:
         engine: TTSEngine | None = None,
         min_chars: int = MIN_ARTICLE_CHARS,
         mp3_bitrate: str = "96k",
+        should_continue: Callable[[], bool] | None = None,
     ) -> None:
         self._engine_name = engine_name
         self._voice = voice
@@ -115,6 +125,7 @@ class VocastEpisodeGenerator:
         self._engine = engine
         self._min_chars = min_chars
         self._mp3_bitrate = mp3_bitrate
+        self._should_continue = should_continue
 
     def generate_from_url(
         self, url: str, *, title: str | None = None, byline: str | None = None
@@ -127,7 +138,15 @@ class VocastEpisodeGenerator:
         narration = build_narration(spoken_title, byline, text)
 
         try:
-            chunk = synthesize_article(narration, engine, voice=voice, progress=False)
+            chunk = synthesize_article(
+                narration,
+                engine,
+                voice=voice,
+                progress=False,
+                should_continue=self._should_continue,
+            )
+        except SynthesisCancelled as exc:
+            raise GenerationCancelled(f"narration of {url} stopped: {exc}") from exc
         except ValueError as exc:
             # Raised for empty input, which the length check above should have
             # already caught; treat it as unusable content rather than retrying.

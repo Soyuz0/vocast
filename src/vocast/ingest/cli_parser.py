@@ -31,6 +31,7 @@ def register_parsers(sub: argparse._SubParsersAction) -> None:
     _register_retention(sub)
     _register_backfill(sub)
     _register_regenerate(sub)
+    _register_control(sub)
     _register_config(sub)
 
 
@@ -242,6 +243,22 @@ def _register_regenerate(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--quiet", action="store_true")
     _add_common(parser)
     parser.set_defaults(func=cmd_regenerate)
+
+
+def _register_control(sub: argparse._SubParsersAction) -> None:
+    from .runtime_commands import cmd_pause, cmd_resume, cmd_status
+
+    pause = sub.add_parser("pause", help="stop narrating new articles")
+    _add_common(pause)
+    pause.set_defaults(func=cmd_pause)
+
+    resume = sub.add_parser("resume", help="start narrating again")
+    _add_common(resume)
+    resume.set_defaults(func=cmd_resume)
+
+    status = sub.add_parser("status", help="show queue progress")
+    _add_common(status)
+    status.set_defaults(func=cmd_status)
 
 
 def _register_config(sub: argparse._SubParsersAction) -> None:

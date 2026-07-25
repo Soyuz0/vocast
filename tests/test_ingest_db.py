@@ -527,3 +527,49 @@ def test_published_episodes_can_be_limited(
 
     limited = entries.published_episodes(limit=2)
     assert [e.episode_id for e in limited] == ["ep-0", "ep-1"]
+
+
+# --- settings --------------------------------------------------------------
+
+
+def test_pause_flag_defaults_to_running(db: Database):
+    from vocast.ingest.repository import SettingsRepository
+
+    assert SettingsRepository(db).worker_paused is False
+
+
+def test_pause_flag_survives_reopening_the_database(tmp_path: Path):
+    """A restart must not silently resume narration."""
+    from vocast.ingest.repository import SettingsRepository
+
+    path = tmp_path / "state.db"
+    first = open_database(path)
+    SettingsRepository(first).pause_worker(True)
+    first.close()
+
+    assert SettingsRepository(open_database(path)).worker_paused is True
+
+
+def test_pause_flag_can_be_cleared(db: Database):
+    from vocast.ingest.repository import SettingsRepository
+
+    settings = SettingsRepository(db)
+    settings.pause_worker(True)
+    settings.pause_worker(False)
+    assert settings.worker_paused is False
+
+
+def test_v2_database_gains_the_settings_table(tmp_path: Path):
+    from vocast.ingest.db import _SCHEMA_V1, _SCHEMA_V2
+    from vocast.ingest.repository import SettingsRepository
+
+    path = tmp_path / "state.db"
+    with sqlite3.connect(path) as raw:
+        raw.executescript(_SCHEMA_V1)
+        raw.executescript(_SCHEMA_V2)
+        raw.execute("PRAGMA user_version=2")
+
+    db = open_database(path)
+    assert db.migrate() == SCHEMA_VERSION
+    SettingsRepository(db).pause_worker(True)
+    assert SettingsRepository(db).worker_paused is True
