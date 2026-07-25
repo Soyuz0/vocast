@@ -382,3 +382,66 @@ def test_config_show_reports_an_unprotected_feed(
 
     cmd_config_show(argparse.Namespace(config=str(_write(tmp_path, ""))))
     assert json.loads(capsys.readouterr().out)["server"]["feed_token"] is None
+
+
+# --- cpu tuning ------------------------------------------------------------
+
+
+def test_threads_are_divided_among_workers(monkeypatch: pytest.MonkeyPatch):
+    """N workers each taking every core oversubscribes the machine N-fold."""
+    from vocast.ingest import tuning
+
+    monkeypatch.setattr(tuning, "available_cpus", lambda: 8)
+    assert tuning.threads_per_worker(4) == 2
+    assert tuning.threads_per_worker(1) == 8
+
+
+def test_at_least_one_thread_per_worker(monkeypatch: pytest.MonkeyPatch):
+    from vocast.ingest import tuning
+
+    monkeypatch.setattr(tuning, "available_cpus", lambda: 2)
+    assert tuning.threads_per_worker(8) == 1
+
+
+def test_explicit_thread_count_wins(monkeypatch: pytest.MonkeyPatch):
+    from vocast.ingest import tuning
+
+    monkeypatch.setattr(tuning, "available_cpus", lambda: 16)
+    assert tuning.threads_per_worker(4, 3) == 3
+
+
+def test_cgroup_quota_is_preferred_over_host_cores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Under a container CPU limit, host core count overstates what we have."""
+    from vocast.ingest import tuning
+
+    quota = tmp_path / "cpu.max"
+    quota.write_text("400000 100000\n")
+    real_open = open
+
+    def fake_open(path, *a, **k):
+        if str(path) == "/sys/fs/cgroup/cpu.max":
+            return real_open(quota)
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert tuning.available_cpus() == 4
+
+
+def test_unlimited_cgroup_falls_back_to_affinity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from vocast.ingest import tuning
+
+    quota = tmp_path / "cpu.max"
+    quota.write_text("max 100000\n")
+    real_open = open
+
+    def fake_open(path, *a, **k):
+        if str(path) == "/sys/fs/cgroup/cpu.max":
+            return real_open(quota)
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert tuning.available_cpus() >= 1

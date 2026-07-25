@@ -17,6 +17,7 @@ from .loops import IntervalLoop
 from .poller import Poller
 from .retention import Retention
 from .storage import verify_storage
+from .tuning import apply_compute_threads
 from .worker import Worker, WorkerLoop
 
 log = get_logger("service")
@@ -77,6 +78,13 @@ class Service:
         if config.retention.enabled:
             self._retention_loop = self._build_retention_loop()
             self._retention_loop.start()
+
+        if self._with_worker:
+            # Before any engine is built: thread pools size themselves on first
+            # use, so this cannot be corrected later.
+            apply_compute_threads(
+                config.worker.concurrency, config.worker.threads_per_worker
+            )
 
         if self._with_worker and config.worker.reclaim_on_start:
             # Done once, before any worker starts: at this point nothing in

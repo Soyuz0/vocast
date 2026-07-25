@@ -26,6 +26,7 @@ Environment variable convention
     VOCAST_WORKER_NEWEST_FIRST
     VOCAST_WORKER_RECLAIM_ON_START
     VOCAST_WORKER_NICE
+    VOCAST_WORKER_THREADS_PER_WORKER
     VOCAST_RETENTION_ENABLED / _MAX_AGE_DAYS / _MAX_EPISODES / _INCLUDE_MANUAL
     VOCAST_TTS_ENGINE / VOCAST_TTS_VOICE
     VOCAST_ADMIN_TOKEN
@@ -128,6 +129,11 @@ class WorkerConfig:
     #: more). Synthesis is CPU-bound; nicing it keeps the machine usable for
     #: interactive work without slowing throughput much when otherwise idle.
     nice: int = 0
+    #: Compute threads each worker's TTS engine may use. None divides the
+    #: available CPUs among the workers. Left to the library's own default,
+    #: every worker grabs every core, and N workers oversubscribe the machine
+    #: N-fold: the threads then spend their time contending rather than working.
+    threads_per_worker: int | None = None
 
 
 @dataclass(frozen=True)
@@ -345,6 +351,11 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 "worker.reclaim_on_start",
             ),
             nice=_as_int(worker.get("nice"), WorkerConfig.nice, "worker.nice"),
+            threads_per_worker=_as_optional_int(
+                worker.get("threads_per_worker"),
+                WorkerConfig.threads_per_worker,
+                "worker.threads_per_worker",
+            ),
         ),
         retention=RetentionConfig(
             enabled=_as_bool(
@@ -446,6 +457,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_WORKER_NEWEST_FIRST", "worker", "newest_first", "bool"),
     ("VOCAST_WORKER_RECLAIM_ON_START", "worker", "reclaim_on_start", "bool"),
     ("VOCAST_WORKER_NICE", "worker", "nice", "int"),
+    ("VOCAST_WORKER_THREADS_PER_WORKER", "worker", "threads_per_worker", "opt_int"),
     ("VOCAST_RETENTION_ENABLED", "retention", "enabled", "bool"),
     ("VOCAST_RETENTION_MAX_AGE_DAYS", "retention", "max_age_days", "opt_int"),
     ("VOCAST_RETENTION_MAX_EPISODES", "retention", "max_episodes", "opt_int"),
