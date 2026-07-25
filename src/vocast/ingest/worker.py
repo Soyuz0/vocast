@@ -109,7 +109,7 @@ class Worker:
         )
         try:
             episode = self._generator.generate_from_url(
-                entry.article_url, title=entry.title
+                entry.article_url, title=entry.title, byline=entry.origin_name
             )
         except PermanentGenerationError as exc:
             return self._fail_permanently(entry, str(exc))

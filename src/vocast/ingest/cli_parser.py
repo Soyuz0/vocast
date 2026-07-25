@@ -30,6 +30,7 @@ def register_parsers(sub: argparse._SubParsersAction) -> None:
     _register_runtime(sub)
     _register_retention(sub)
     _register_backfill(sub)
+    _register_regenerate(sub)
     _register_config(sub)
 
 
@@ -220,6 +221,27 @@ def _register_backfill(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--quiet", action="store_true")
     _add_common(parser)
     parser.set_defaults(func=cmd_backfill_text)
+
+
+def _register_regenerate(sub: argparse._SubParsersAction) -> None:
+    from .runtime_commands import cmd_regenerate
+
+    parser = sub.add_parser(
+        "regenerate",
+        help="delete finished audio and narrate those articles again",
+    )
+    parser.add_argument(
+        "entry_id", type=int, nargs="?", default=None, help="one entry, or all"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=100000, metavar="N", help="cap how many"
+    )
+    parser.add_argument(
+        "-y", "--yes", action="store_true", help="skip the confirmation prompt"
+    )
+    parser.add_argument("--quiet", action="store_true")
+    _add_common(parser)
+    parser.set_defaults(func=cmd_regenerate)
 
 
 def _register_config(sub: argparse._SubParsersAction) -> None:

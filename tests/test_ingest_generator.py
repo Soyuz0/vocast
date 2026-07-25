@@ -333,7 +333,9 @@ def test_narrated_text_is_stored_beside_the_audio(
     )
 
     stored = library.get_entry(episode.episode_id)
-    assert stored.article_text().startswith("Sentence one.")
+    # What is stored is what was narrated, intro included.
+    assert stored.article_text().startswith("Extracted Title.")
+    assert "Sentence one." in stored.article_text()
 
 
 def test_article_text_is_absent_for_older_episodes(lib: Path):
@@ -347,3 +349,59 @@ def test_article_text_is_absent_for_older_episodes(lib: Path):
         engine="kokoro",
     )
     assert library.get_entry(entry.id).article_text() is None
+
+
+# --- narration intro -------------------------------------------------------
+
+
+def test_narration_starts_with_title_then_byline_then_article():
+    from vocast.ingest.generator import build_narration
+
+    spoken = build_narration("The Bitter Lesson", "LessWrong", "Body starts here.")
+    assert spoken == "The Bitter Lesson.\n\nby LessWrong.\n\nBody starts here."
+
+
+def test_duplicate_headline_is_not_read_twice():
+    """Extractors often repeat the headline as the first line of the body."""
+    from vocast.ingest.generator import build_narration
+
+    spoken = build_narration(
+        "Solve for the equilibrium", "MR", "Solve for the equilibrium\nThen the body."
+    )
+    assert spoken.count("Solve for the equilibrium") == 1
+    assert spoken == "Solve for the equilibrium.\n\nby MR.\n\nThen the body."
+
+
+def test_headline_match_ignores_punctuation_and_case():
+    from vocast.ingest.generator import build_narration
+
+    spoken = build_narration("Duane Arnold", "LW", "duane arnold!\nBody.")
+    assert spoken == "Duane Arnold.\n\nby LW.\n\nBody."
+
+
+def test_byline_is_omitted_when_the_publication_is_unknown():
+    from vocast.ingest.generator import build_narration
+
+    assert build_narration("A Title", None, "Body.") == "A Title.\n\nBody."
+
+
+def test_existing_title_punctuation_is_not_doubled():
+    from vocast.ingest.generator import build_narration
+
+    assert build_narration("Really?", "Pub", "Body.").startswith("Really?\n\nby Pub.")
+
+
+def test_generator_narrates_the_intro_and_records_it(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_extraction(monkeypatch, title="Extracted", text=ARTICLE_TEXT)
+    gen = VocastEpisodeGenerator(engine=engine)
+
+    episode = gen.generate_from_url(
+        "https://example.com/a", title="Feed Title", byline="Marginal Revolution"
+    )
+
+    assert engine.synthesized[0].startswith("Feed Title.")
+    assert "by Marginal Revolution." in engine.synthesized[0]
+    stored = library.get_entry(episode.episode_id).article_text()
+    assert stored.startswith("Feed Title.\n\nby Marginal Revolution.")

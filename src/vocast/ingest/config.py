@@ -24,6 +24,7 @@ Environment variable convention
     VOCAST_WORKER_BASE_RETRY_MINUTES
     VOCAST_WORKER_MAX_RETRY_MINUTES
     VOCAST_WORKER_NEWEST_FIRST
+    VOCAST_WORKER_RECLAIM_ON_START
     VOCAST_RETENTION_ENABLED / _MAX_AGE_DAYS / _MAX_EPISODES / _INCLUDE_MANUAL
     VOCAST_TTS_ENGINE / VOCAST_TTS_VOICE
     VOCAST_ADMIN_TOKEN
@@ -116,6 +117,12 @@ class WorkerConfig:
     #: Narrate the most recently published article first instead of the
     #: longest-queued one. Off by default so existing setups keep FIFO order.
     newest_first: bool = False
+    #: Requeue every in-flight claim at startup rather than waiting for
+    #: processing_timeout_minutes. A restart abandons whatever was mid-synthesis,
+    #: and waiting the full timeout leaves the newest articles stuck. Safe only
+    #: when this process is the sole worker, so it is off by default: another
+    #: `vocast worker` running alongside would have its live claims stolen.
+    reclaim_on_start: bool = False
 
 
 @dataclass(frozen=True)
@@ -327,6 +334,11 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 WorkerConfig.newest_first,
                 "worker.newest_first",
             ),
+            reclaim_on_start=_as_bool(
+                worker.get("reclaim_on_start"),
+                WorkerConfig.reclaim_on_start,
+                "worker.reclaim_on_start",
+            ),
         ),
         retention=RetentionConfig(
             enabled=_as_bool(
@@ -426,6 +438,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_WORKER_BASE_RETRY_MINUTES", "worker", "base_retry_minutes", "int"),
     ("VOCAST_WORKER_MAX_RETRY_MINUTES", "worker", "max_retry_minutes", "int"),
     ("VOCAST_WORKER_NEWEST_FIRST", "worker", "newest_first", "bool"),
+    ("VOCAST_WORKER_RECLAIM_ON_START", "worker", "reclaim_on_start", "bool"),
     ("VOCAST_RETENTION_ENABLED", "retention", "enabled", "bool"),
     ("VOCAST_RETENTION_MAX_AGE_DAYS", "retention", "max_age_days", "opt_int"),
     ("VOCAST_RETENTION_MAX_EPISODES", "retention", "max_episodes", "opt_int"),

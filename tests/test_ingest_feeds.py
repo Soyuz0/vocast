@@ -378,10 +378,10 @@ def test_control_characters_in_a_title_do_not_produce_invalid_xml(
 # --- description -----------------------------------------------------------
 
 
-def test_description_carries_the_article_text_and_a_link(
+def test_description_is_just_a_link_to_the_original(
     lib: Path, sources: SourceRepository, entries: EntryRepository
 ):
-    """Show notes double as a transcript of what is read aloud."""
+    """A full article reads badly as show notes, and bloats the feed."""
     _make_episode(
         lib,
         "20260604T120000Z_a_aaa111",
@@ -398,8 +398,8 @@ def test_description_carries_the_article_text_and_a_link(
     )
 
     description = _items(_render(entries))[0].find("description").text
-    assert "The full body of the article." in description
-    assert "https://example.com/alpha" in description
+    assert description == "Read the original: https://example.com/alpha"
+    assert "The full body of the article." not in description
     # Provenance moved to the title and itunes:author; it is not repeated here.
     assert "Originally published" not in description
 

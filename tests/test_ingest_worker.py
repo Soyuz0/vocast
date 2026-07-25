@@ -48,11 +48,13 @@ class StubGenerator:
     def __init__(self, *, results: list[object] | None = None) -> None:
         self.results = results or []
         self.calls: list[tuple[str, str | None]] = []
+        self.bylines: list[str | None] = []
 
     def generate_from_url(
-        self, url: str, *, title: str | None = None
+        self, url: str, *, title: str | None = None, byline: str | None = None
     ) -> GeneratedEpisode:
         self.calls.append((url, title))
+        self.bylines.append(byline)
         result = (
             self.results.pop(0)
             if self.results
@@ -369,3 +371,35 @@ def test_newest_first_falls_back_to_discovery_time_without_a_date(
     )
     worker = _worker(entries, StubGenerator(), newest_first=True)
     assert worker.process_next().entry_id == undated.id
+
+
+def test_reclaim_with_zero_timeout_requeues_every_claim(
+    entries: EntryRepository, source_id: int
+):
+    """A restart abandons in-flight work; waiting the full timeout strands it."""
+    _queue(entries, source_id, "a")
+    entries.claim_next()
+    assert entries.get(1).status is EntryStatus.PROCESSING
+
+    assert entries.reclaim_stale(timeout=timedelta(0)) == 1
+    assert entries.get(1).status is EntryStatus.PENDING
+
+
+def test_worker_passes_the_publication_as_the_byline(
+    entries: EntryRepository, source_id: int
+):
+    entries.insert_if_new(
+        FeedEntry(
+            source_id=source_id,
+            external_guid="a",
+            title="An Article",
+            article_url="https://example.com/a",
+            published_at=utcnow(),
+            origin_name="Daring Fireball",
+        )
+    )
+    generator = StubGenerator()
+
+    _worker(entries, generator).process_next()
+
+    assert generator.bylines == ["Daring Fireball"]

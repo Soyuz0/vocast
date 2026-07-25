@@ -213,6 +213,8 @@ def cmd_backfill_text(args: argparse.Namespace) -> int:
 
     filled = failed = 0
     for entry in missing:
+        if not entry.source:
+            continue
         try:
             _, text, _ = fetch_article(
                 entry.source,
@@ -228,4 +230,62 @@ def cmd_backfill_text(args: argparse.Namespace) -> int:
             print(f"  + {entry.short_id}  {entry.title[:56]}")
 
     print(f"\nfilled {filled}, failed {failed}")
+    return 0
+
+
+def cmd_regenerate(args: argparse.Namespace) -> int:
+    """Discard finished audio and queue those articles to be narrated again.
+
+    Use after changing how narration is composed. The old audio is deleted and
+    the episode is rebuilt from scratch, which means a new episode id: podcast
+    clients treat the result as a new episode and will re-download it.
+    """
+    from .. import library
+    from .models import EntryStatus
+
+    context = build_context(args)
+
+    if args.entry_id:
+        entry = context.entries.get(args.entry_id)
+        if entry is None:
+            print(f"error: no entry with id {args.entry_id}", file=sys.stderr)
+            return 1
+        targets = [entry]
+    else:
+        targets = context.entries.all(status=EntryStatus.READY, limit=args.limit)
+
+    if not targets:
+        print("nothing to regenerate")
+        return 0
+
+    if not args.yes:
+        print(f"This deletes the audio for {len(targets)} episode(s) and re-narrates")
+        print("them. Podcast clients will see new episodes and re-download.")
+        try:
+            answer = input("Continue? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return 0
+
+    requeued = 0
+    for entry in targets:
+        if entry.vocast_episode_id:
+            episode = library.get_entry(entry.vocast_episode_id)
+            if episode is not None:
+                try:
+                    library.delete_entry(episode)
+                except OSError as exc:
+                    print(
+                        f"  ! {entry.id}: could not delete audio: {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
+        context.entries.requeue(entry.id, clear_episode=True)
+        requeued += 1
+        if not args.quiet:
+            print(f"  ~ entry {entry.id}  {entry.title[:56]}")
+
+    print(f"\nrequeued {requeued} article(s); the worker will narrate them again")
     return 0

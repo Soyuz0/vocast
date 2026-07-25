@@ -27,6 +27,40 @@ log = get_logger("generator")
 MIN_ARTICLE_CHARS = 400
 
 
+def build_narration(title: str, byline: str | None, body: str) -> str:
+    """Compose what is actually read aloud: title, byline, then the article.
+
+    Extractors frequently repeat the headline as the article's first line, so a
+    leading line matching the title is dropped rather than narrated twice.
+    Sentence-terminating punctuation is added so the chunker treats the intro as
+    its own sentences instead of running it into the first paragraph.
+    """
+    lines = body.lstrip().splitlines()
+    if lines and _is_same_heading(lines[0], title):
+        body = "\n".join(lines[1:]).lstrip()
+
+    intro = [_as_sentence(title)]
+    if byline:
+        intro.append(_as_sentence(f"by {byline}"))
+    return "\n\n".join([*intro, body.strip()])
+
+
+def _as_sentence(text: str) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    return stripped if stripped[-1] in ".!?:;," else f"{stripped}."
+
+
+def _normalize_heading(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _is_same_heading(line: str, title: str) -> bool:
+    normalized = _normalize_heading(line)
+    return bool(normalized) and normalized == _normalize_heading(title)
+
+
 @dataclass(frozen=True)
 class GeneratedEpisode:
     episode_id: str
@@ -54,6 +88,7 @@ class EpisodeGenerator(Protocol):
         url: str,
         *,
         title: str | None = None,
+        byline: str | None = None,
     ) -> GeneratedEpisode: ...
 
 
@@ -82,14 +117,17 @@ class VocastEpisodeGenerator:
         self._mp3_bitrate = mp3_bitrate
 
     def generate_from_url(
-        self, url: str, *, title: str | None = None
+        self, url: str, *, title: str | None = None, byline: str | None = None
     ) -> GeneratedEpisode:
         extracted_title, text, cover_url = self._extract(url)
         engine = self._resolve_engine()
         voice = self._voice or engine.default_voice
 
+        spoken_title = title or extracted_title or "untitled"
+        narration = build_narration(spoken_title, byline, text)
+
         try:
-            chunk = synthesize_article(text, engine, voice=voice, progress=False)
+            chunk = synthesize_article(narration, engine, voice=voice, progress=False)
         except ValueError as exc:
             # Raised for empty input, which the length check above should have
             # already caught; treat it as unusable content rather than retrying.
@@ -100,14 +138,14 @@ class VocastEpisodeGenerator:
             ) from exc
 
         entry = library.add_entry(
-            title=title or extracted_title or "untitled",
+            title=spoken_title,
             chunk=chunk,
             voice=voice,
             engine=self._engine_name,
             source=url,
             cover_url=cover_url,
             mp3_bitrate=self._mp3_bitrate,
-            article_text=text,
+            article_text=narration,
         )
         log.info(
             "episode generated %s",
@@ -123,7 +161,7 @@ class VocastEpisodeGenerator:
             title=entry.title,
             audio_path=str(entry.audio_path()),
             duration_seconds=entry.duration_seconds,
-            content_hash=_hash_text(text),
+            content_hash=_hash_text(narration),
         )
 
     # -- internals ---------------------------------------------------------

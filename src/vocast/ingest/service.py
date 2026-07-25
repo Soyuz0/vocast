@@ -76,6 +76,20 @@ class Service:
             self._retention_loop = self._build_retention_loop()
             self._retention_loop.start()
 
+        if self._with_worker and config.worker.reclaim_on_start:
+            # Done once, before any worker starts: at this point nothing in
+            # this process holds a claim, so anything still marked processing
+            # was abandoned by a previous run. Doing it per worker would let
+            # one steal a sibling's freshly claimed entry.
+            from datetime import timedelta
+
+            recovered = self.context.entries.reclaim_stale(timeout=timedelta(0))
+            if recovered:
+                log.warning(
+                    "requeued entries abandoned by a previous run %s",
+                    kv(count=recovered),
+                )
+
         if self._with_worker:
             # One generator per worker: each holds its own TTS engine, and
             # engines are not documented as thread-safe.

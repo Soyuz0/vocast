@@ -181,17 +181,16 @@ def episode_title(episode: FeedEpisode) -> str:
 
 
 def episode_description(episode: FeedEpisode) -> str:
-    """The narrated article text as show notes, plus a link to the original.
+    """A link back to the original article, nothing more.
 
-    Clients display this while playing, so it doubles as a transcript of what
-    is being read aloud.
+    The narrated text is deliberately not inlined here: podcast clients render
+    show notes as a wall of text, which reads badly for a full article, and it
+    would bloat the feed by megabytes. The text is still stored next to the
+    audio (see LibraryEntry.article_path) for anything that wants it.
     """
-    paragraphs: list[str] = []
-    if episode.article_text:
-        paragraphs.append(episode.article_text.strip())
     if episode.article_url:
-        paragraphs.append(f"Read the original: {episode.article_url}")
-    return "\n\n".join(p for p in paragraphs if p) or episode.title
+        return f"Read the original: {episode.article_url}"
+    return episode.title
 
 
 def build_podcast_rss(channel: FeedChannel, episodes: list[FeedEpisode]) -> str:

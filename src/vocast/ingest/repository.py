@@ -440,15 +440,26 @@ class EntryRepository:
                 (EntryStatus.FAILED.value, error[:2000], now, entry_id),
             )
 
-    def requeue(self, entry_id: int, *, reset_retries: bool = True) -> bool:
-        """Put an entry back in the queue for immediate processing."""
+    def requeue(
+        self,
+        entry_id: int,
+        *,
+        reset_retries: bool = True,
+        clear_episode: bool = False,
+    ) -> bool:
+        """Put an entry back in the queue for immediate processing.
+
+        clear_episode drops the pointer to the generated audio, for when that
+        audio has been deleted and will be rebuilt.
+        """
         now = to_iso(utcnow())
         retry_clause = "retry_count = 0," if reset_retries else ""
+        episode_clause = "vocast_episode_id = NULL," if clear_episode else ""
         with self._db.transaction() as conn:
             cur = conn.execute(
                 f"""
                 UPDATE entries
-                SET status = ?, {retry_clause} next_retry_at = NULL,
+                SET status = ?, {retry_clause} {episode_clause} next_retry_at = NULL,
                     claimed_at = NULL, error_message = NULL, updated_at = ?
                 WHERE id = ?
                 """,

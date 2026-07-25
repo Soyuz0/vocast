@@ -260,9 +260,7 @@ def test_full_poll_disables_the_adapter_early_stop(
         def fetch_entries(self) -> list[FeedEntry]:
             return []
 
-    poller = Poller(
-        sources=sources, entries=entries, adapter_factory=RecordingAdapter
-    )
+    poller = Poller(sources=sources, entries=entries, adapter_factory=RecordingAdapter)
     poller.poll_source(source)
     poller.poll_source(source, full=True)
 
