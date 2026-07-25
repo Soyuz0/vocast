@@ -393,8 +393,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_synth.set_defaults(func=cmd_synth)
 
+    from .ingest.cli_parser import register_parsers
+
+    register_parsers(sub)
+
     args = parser.parse_args(argv)
-    return args.func(args)
+
+    from .ingest.config import ConfigError
+
+    try:
+        return args.func(args)
+    except ConfigError as exc:
+        # A misconfigured file is a user error, not a crash; report it plainly.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print()
+        return 130
 
 
 if __name__ == "__main__":

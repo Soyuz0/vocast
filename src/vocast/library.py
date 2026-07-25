@@ -19,6 +19,23 @@ from .engines import AudioChunk
 
 LIBRARY_PATH = Path.home() / ".vocast" / "library"
 
+
+def set_library_path(path: Path | str) -> Path:
+    """Point the library at a different directory and return it.
+
+    Entries resolve their paths against the module-level LIBRARY_PATH at call
+    time, so the long-running service can relocate storage once at startup
+    (from config) instead of every caller threading a path around.
+    """
+    global LIBRARY_PATH
+    LIBRARY_PATH = Path(path).expanduser()
+    return LIBRARY_PATH
+
+
+def library_path() -> Path:
+    return LIBRARY_PATH
+
+
 _COVER_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
