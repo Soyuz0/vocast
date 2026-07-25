@@ -427,6 +427,13 @@ enclosures use the public host too.
 | `/feeds/all.xml` | Everything. Identical to `/feed.xml`. |
 | `/feeds/source/<id>.xml` | One source only, as its own show. |
 
+Feeds carry the newest `server.feed_max_items` episodes (default 300); set it to
+`unlimited` for no cap. Rendering costs nothing per episode -- duration and size
+are read from the database, not from the audio files -- so an uncapped feed is
+affordable even with thousands of episodes. Episodes finished before this was
+recorded still read their metadata from disk, which on a network share costs
+around 17 ms each.
+
 Use `vocast source list` to get source ids.
 
 > [!NOTE]
@@ -467,6 +474,129 @@ only helps once the underlying problem is fixed.
 
 Entry states: `pending` → `processing` → `ready`, plus `failed`, `ignored`, and
 `expired` (removed by retention).
+
+Some failures are correct and permanent. Comics, video links, podcast episode
+pages, and paywalled teasers extract to almost nothing, and vocast refuses to
+publish an episode of a navigation menu. Check what a URL actually yields before
+assuming extraction is at fault:
+
+```
+vocast entry show 42        # the URL, error, retry count and schedule
+```
+
+## Controlling narration
+
+Synthesis is CPU-bound and will use every core it is given. It can be stopped
+and resumed without restarting anything:
+
+```
+vocast pause      # stop narrating; CPU drops to idle
+vocast resume
+vocast status     # queue progress and whether it is paused
+```
+
+`pause` interrupts the article in progress rather than waiting for it. Long
+articles can take hours, so waiting would not be a pause in any useful sense.
+The article returns to the queue with its attempt count untouched and no partial
+audio is written; it restarts from the beginning when you resume. The state is
+stored in the database, so a restart does not silently resume.
+
+`vocast status` reports progress:
+
+```
+narration : running
+pending   : 10489
+ready     : 13
+failed    : 18
+progress  : 31/10523 (0.3%)
+```
+
+### Re-narrating existing episodes
+
+After changing anything about how narration sounds -- a different voice, engine,
+or the title and byline intro -- existing episodes keep their old audio until
+regenerated:
+
+```
+vocast regenerate            # every finished episode
+vocast regenerate 42         # just one
+vocast regenerate --limit 20
+```
+
+This happens **in place**: the episode keeps its id, and therefore its podcast
+GUID, and the new audio is swapped in only once complete. Subscribers see the
+episode update rather than the old one vanish and a new one appear, and the feed
+never goes empty. Clients will re-download the audio, which is unavoidable since
+it genuinely changed.
+
+`vocast backfill-text` re-extracts article text for episodes generated before
+that text was stored. It only fetches and extracts -- nothing is re-synthesized.
+
+## Choosing a TTS engine
+
+Two engines ship, both running the same Kokoro model and voices:
+
+```yaml
+tts:
+  engine: kokoro-onnx    # or: kokoro
+  voice: af_heart
+```
+
+`kokoro` uses PyTorch. `kokoro-onnx` runs the same weights under ONNX Runtime and
+is faster on CPU. Measured on a Coffee Lake i5, one thread, same article:
+
+| Engine | Synthesis | Model load | Notes |
+|---|---|---|---|
+| `kokoro` (PyTorch) | 273.5s | 7.4s | |
+| `kokoro-onnx` | 196.9s | 1.4s | **1.39x faster**, fp32 |
+
+The ONNX engine uses fp32 weights, so it is numerically equivalent to the
+PyTorch path: switching engines cannot change how anything sounds. Model files
+download on first use to `VOCAST_TTS_MODEL_DIR` (default `~/.vocast/models`).
+
+> Quantized variants exist and were measured too. On this CPU generation int8 is
+> **2.2x slower** than fp32, because int8 inference needs VNNI instructions that
+> Coffee Lake lacks and otherwise pays dequantize overhead in software. fp16 is
+> ~10% faster than fp32, winning on memory bandwidth rather than arithmetic, but
+> it is lossy. Newer CPUs with VNNI would likely favour int8; measure before
+> assuming.
+
+## Tuning throughput
+
+```yaml
+worker:
+  concurrency: 3           # articles narrated in parallel
+  threads_per_worker: 1    # compute threads each may use
+  nice: 15                 # yield to interactive work
+  newest_first: true       # narrate recent articles before old ones
+  reclaim_on_start: true   # requeue work abandoned by a restart
+```
+
+**`threads_per_worker` matters more than it looks.** Left unset it is
+CPUs / concurrency, which is almost always what you want. Left to the TTS
+library's own default, *every* worker takes *every* core: four workers on a
+four-CPU quota means twenty-four compute threads contending for four cores,
+which reads as fully-busy CPU while producing almost nothing.
+
+`nice` deprioritizes only the synthesis threads -- on Linux `nice` is per-thread,
+so the HTTP server stays responsive. It does not reduce throughput on an
+otherwise idle machine.
+
+`newest_first` claims the most recently *published* article rather than the
+longest-queued one. With a large backlog that is the difference between starting
+on today's news and starting on a four-year-old post. New articles therefore go
+to the front of the queue as they are discovered.
+
+`reclaim_on_start` requeues anything left mid-synthesis by a restart, instead of
+waiting out `processing_timeout_minutes`. Enable it only when this process is the
+sole worker: a separate `vocast worker` running alongside would have its live
+claims stolen.
+
+> On a thermally limited machine, more workers is not always faster. Measure
+> *sustained* throughput, not a burst: a cooled-down benchmark on one deployment
+> preferred four workers, while an eleven-minute run with temperature and clock
+> recorded showed four and three converging once heat-soaked, with four
+> periodically collapsing to the CPU's minimum frequency.
 
 ## Retention
 
@@ -514,6 +644,7 @@ Environment variables follow `VOCAST_<SECTION>_<KEY>`:
 | `VOCAST_SERVER_PUBLIC_BASE_URL` | derived per request |
 | `VOCAST_SERVER_FEED_TOKEN` | unset (feeds open) |
 | `VOCAST_SERVER_AUDIO_BASE_URL` | same as the feed host |
+| `VOCAST_SERVER_FEED_MAX_ITEMS` | `300` (`unlimited` for no cap) |
 | `VOCAST_DATABASE_PATH` | `~/.vocast/vocast.db` |
 | `VOCAST_STORAGE_LIBRARY_PATH` | `~/.vocast/library` |
 | `VOCAST_STORAGE_REQUIRE_MARKER` | `false` |
@@ -523,6 +654,9 @@ Environment variables follow `VOCAST_<SECTION>_<KEY>`:
 | `VOCAST_WORKER_MAX_RETRIES` | `5` |
 | `VOCAST_WORKER_BASE_RETRY_MINUTES` | `5` |
 | `VOCAST_WORKER_MAX_RETRY_MINUTES` | `360` |
+| `VOCAST_WORKER_NICE` | `0` |
+| `VOCAST_WORKER_THREADS_PER_WORKER` | CPUs / concurrency |
+| `VOCAST_WORKER_RECLAIM_ON_START` | `false` |
 | `VOCAST_WORKER_NEWEST_FIRST` | `false` |
 | `VOCAST_RETENTION_ENABLED` | `false` |
 | `VOCAST_RETENTION_MAX_AGE_DAYS` | `90` |
@@ -530,6 +664,7 @@ Environment variables follow `VOCAST_<SECTION>_<KEY>`:
 | `VOCAST_RETENTION_INCLUDE_MANUAL` | `false` |
 | `VOCAST_TTS_ENGINE` | `kokoro` |
 | `VOCAST_TTS_VOICE` | engine default (`af_heart`) |
+| `VOCAST_TTS_MODEL_DIR` | `~/.vocast/models` (ONNX engine) |
 | `VOCAST_ADMIN_TOKEN` | unset (admin API open) |
 | `VOCAST_LOG_LEVEL` | `INFO` |
 | `VOCAST_ALLOW_PRIVATE_URLS` | `false` |
