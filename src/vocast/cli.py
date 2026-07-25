@@ -300,6 +300,21 @@ def cmd_synth(args: argparse.Namespace) -> int:
     return 0
 
 
+def _apply_storage_config(config_path: str | None) -> None:
+    """Point the library at its configured directory before any command runs.
+
+    Every command needs this, not just the service ones: otherwise `vocast add`
+    would write to the default location while the server read from the
+    configured one, and a manually added article would silently never appear in
+    the feed.
+    """
+    from . import library
+    from .ingest.config import load_config
+
+    config = load_config(config_path)
+    library.set_library_path(config.storage.library_path)
+
+
 def _vocast_version() -> str:
     try:
         return version("vocast")
@@ -402,6 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     from .ingest.config import ConfigError
 
     try:
+        _apply_storage_config(getattr(args, "config", None))
         return args.func(args)
     except ConfigError as exc:
         # A misconfigured file is a user error, not a crash; report it plainly.

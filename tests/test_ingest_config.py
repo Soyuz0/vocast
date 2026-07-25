@@ -285,3 +285,22 @@ def test_example_config_declares_no_literal_secrets():
     for line in body.splitlines():
         if any(key in line for key in ("password:", "username:", "admin_token:")):
             assert "${" in line, f"example config hardcodes a secret: {line.strip()}"
+
+
+def test_configured_library_path_applies_to_legacy_commands(tmp_path: Path):
+    """`vocast add` and the server must agree on where audio lives.
+
+    They are wired up separately, so without this the manual workflow would
+    write episodes the feed never shows.
+    """
+    from vocast import library
+    from vocast.cli import _apply_storage_config
+
+    original = library.LIBRARY_PATH
+    custom = tmp_path / "custom-audio"
+    config = _write(tmp_path, f"storage:\n  library_path: {custom}\n")
+    try:
+        _apply_storage_config(str(config))
+        assert library.LIBRARY_PATH == custom
+    finally:
+        library.set_library_path(original)
