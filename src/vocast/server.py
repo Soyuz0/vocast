@@ -44,15 +44,19 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         return PlainTextResponse("\n".join(lines) + "\n")
 
     @app.api_route("/feed.xml", methods=["GET", "HEAD"])
-    def feed(request: Request) -> Response:
+    def feed(request: Request, token: str | None = None) -> Response:
         """The original feed. An alias for /feeds/all.xml once ingestion is on,
         so a subscriber added before RSS support keeps getting every episode."""
+        if state is not None:
+            state.require_feed_token(token)
         base = _base_url(state, request)
-        xml = _render_all(state, base)
+        xml = _render_all(state, base, request)
         return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
 
     @app.api_route("/audio/{entry_id}.mp3", methods=["GET", "HEAD"])
-    def audio(entry_id: str) -> Response:
+    def audio(entry_id: str, token: str | None = None) -> Response:
+        if state is not None:
+            state.require_feed_token(token)
         entry = get_entry(entry_id)
         if entry is None:
             return PlainTextResponse("not found", status_code=404)
@@ -62,7 +66,9 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         return FileResponse(path, media_type="audio/mpeg")
 
     @app.api_route("/cover.jpg", methods=["GET", "HEAD"])
-    def cover() -> Response:
+    def cover(token: str | None = None) -> Response:
+        if state is not None:
+            state.require_feed_token(token)
         if not _SHOW_COVER:
             return PlainTextResponse("not found", status_code=404)
         return Response(_SHOW_COVER, media_type="image/jpeg")
@@ -88,17 +94,33 @@ def _base_url(state: ServiceState | None, request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _render_all(state: ServiceState | None, base_url: str) -> str:
-    from .ingest.feeds import FeedChannel, build_podcast_rss, collect_episodes
+def _render_all(
+    state: ServiceState | None, base_url: str, request: Request | None = None
+) -> str:
+    from .ingest.feeds import (
+        FeedChannel,
+        build_podcast_rss,
+        collect_episodes,
+        with_token,
+    )
 
     entries = state.context.entries if state is not None else None
-    episodes = collect_episodes(entries, base_url=base_url)
+    token = state.feed_token if state is not None else None
+    audio_base = (
+        state.audio_base_url(request)
+        if state is not None and request is not None
+        else None
+    )
+    episodes = collect_episodes(
+        entries, base_url=base_url, audio_base_url=audio_base, token=token
+    )
+    cover = with_token(f"{base_url}/cover.jpg", token) if _SHOW_COVER else None
     return build_podcast_rss(
         FeedChannel(
             title="vocast",
             link=base_url,
             description="Self-hosted articles-as-podcasts",
-            image_url=f"{base_url}/cover.jpg" if _SHOW_COVER else None,
+            image_url=cover,
         ),
         episodes,
     )
@@ -141,7 +163,7 @@ def _optional_state() -> ServiceState | None:
         from .ingest.context import AppContext
 
         return ServiceState(context=AppContext.create())
-    except Exception:  # noqa: BLE001 - never let ingestion break `vocast serve`
+    except Exception:
         import logging
 
         logging.getLogger("vocast.server").warning(

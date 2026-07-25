@@ -6,6 +6,7 @@ Mounted onto the existing vocast FastAPI app, so `/feed.xml` and
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from .adapters import supported_kinds
 from .context import AppContext
-from .feeds import FeedChannel, build_podcast_rss, collect_episodes
+from .feeds import FeedChannel, build_podcast_rss, collect_episodes, with_token
 from .logs import get_logger, kv
 from .models import EntryStatus
 from .nethttp import BlockedURLError, validate_url
@@ -34,6 +35,28 @@ class ServiceState:
     context: AppContext
     worker_running: bool = False
     poller_running: bool = False
+
+    def require_feed_token(self, supplied: str | None) -> None:
+        """Reject feed/audio requests without the configured token.
+
+        A podcast client cannot send an Authorization header, so the secret has
+        to travel in the URL. Compared with compare_digest to avoid leaking it
+        through timing.
+        """
+        expected = self.context.config.server.feed_token
+        if not expected:
+            return
+        if not supplied or not secrets.compare_digest(supplied, expected):
+            raise HTTPException(401, "a valid ?token= is required for this feed")
+
+    @property
+    def feed_token(self) -> str | None:
+        return self.context.config.server.feed_token
+
+    def audio_base_url(self, request: Request) -> str:
+        """Where enclosures should point, which may differ from the feed host."""
+        configured = self.context.config.server.audio_base_url
+        return configured or self.base_url(request)
 
     def base_url(self, request: Request) -> str:
         """Absolute base for enclosure URLs.
@@ -78,11 +101,15 @@ def create_router(state: ServiceState) -> APIRouter:
 
 def _register_feeds(router: APIRouter, state: ServiceState) -> None:
     @router.api_route("/feeds/all.xml", methods=["GET", "HEAD"])
-    def all_feed(request: Request) -> Response:
+    def all_feed(request: Request, token: str | None = None) -> Response:
+        state.require_feed_token(token)
         return _render_feed(state, request, source_id=None)
 
     @router.api_route("/feeds/source/{source_id}.xml", methods=["GET", "HEAD"])
-    def source_feed(source_id: int, request: Request) -> Response:
+    def source_feed(
+        source_id: int, request: Request, token: str | None = None
+    ) -> Response:
+        state.require_feed_token(token)
         source = state.context.sources.get(source_id)
         if source is None:
             return PlainTextResponse("unknown source", status_code=404)
@@ -100,7 +127,11 @@ def _render_feed(
 ) -> Response:
     base = state.base_url(request)
     episodes = collect_episodes(
-        state.context.entries, base_url=base, source_id=source_id
+        state.context.entries,
+        base_url=base,
+        source_id=source_id,
+        audio_base_url=state.audio_base_url(request),
+        token=state.feed_token,
     )
     title = f"vocast — {source_name}" if source_name else "vocast"
     description = (
@@ -113,7 +144,7 @@ def _render_feed(
             title=title,
             link=base,
             description=description,
-            image_url=f"{base}/cover.jpg",
+            image_url=with_token(f"{base}/cover.jpg", state.feed_token),
         ),
         episodes,
     )

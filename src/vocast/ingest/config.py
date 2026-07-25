@@ -11,6 +11,8 @@ Environment variable convention
     VOCAST_CONFIG                            path to this YAML file
     VOCAST_SERVER_HOST / _PORT
     VOCAST_SERVER_PUBLIC_BASE_URL
+    VOCAST_SERVER_FEED_TOKEN
+    VOCAST_SERVER_AUDIO_BASE_URL
     VOCAST_DATABASE_PATH
     VOCAST_STORAGE_LIBRARY_PATH
     VOCAST_STORAGE_REQUIRE_MARKER
@@ -64,6 +66,14 @@ class ServerConfig:
     #: unset, URLs are derived per-request, which breaks behind a proxy that
     #: terminates TLS.
     public_base_url: str | None = None
+    #: When set, the feeds, audio, and cover art require `?token=<value>`.
+    #: Podcast clients cannot send headers, so a query parameter is the only
+    #: option; this is how commercial private podcast feeds work.
+    feed_token: str | None = None
+    #: Base URL for episode audio, when it differs from public_base_url. Lets a
+    #: feed be published on a public endpoint while the audio it points at stays
+    #: on a private network, so only titles ever leave.
+    audio_base_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +257,8 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
             host=str(server.get("host", ServerConfig.host)),
             port=_as_int(server.get("port"), ServerConfig.port, "server.port"),
             public_base_url=_clean_base_url(server.get("public_base_url")),
+            feed_token=_as_optional_str(server.get("feed_token")),
+            audio_base_url=_clean_base_url(server.get("audio_base_url")),
         ),
         database=DatabaseConfig(
             path=Path(str(database.get("path", DatabaseConfig.path))).expanduser()
@@ -381,6 +393,8 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_SERVER_HOST", "server", "host", "str"),
     ("VOCAST_SERVER_PORT", "server", "port", "int"),
     ("VOCAST_SERVER_PUBLIC_BASE_URL", "server", "public_base_url", "base_url"),
+    ("VOCAST_SERVER_FEED_TOKEN", "server", "feed_token", "opt_str"),
+    ("VOCAST_SERVER_AUDIO_BASE_URL", "server", "audio_base_url", "base_url"),
     ("VOCAST_DATABASE_PATH", "database", "path", "path"),
     ("VOCAST_STORAGE_LIBRARY_PATH", "storage", "library_path", "path"),
     ("VOCAST_STORAGE_REQUIRE_MARKER", "storage", "require_marker", "bool"),

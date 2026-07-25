@@ -397,3 +397,82 @@ def test_unsafe_entry_ids_never_resolve(entry_id: str):
 
 def test_real_entry_ids_are_considered_safe():
     assert library.is_valid_entry_id("20260604T120000Z_the_bitter_lesson_a8f31c")
+
+
+# --- feed token ------------------------------------------------------------
+
+
+@pytest.fixture
+def tokened_client(context: AppContext) -> TestClient:
+    context.config = replace(
+        context.config, server=replace(context.config.server, feed_token="feed-s3cret")
+    )
+    _make_episode(context.config.storage.library_path, "20260604T120000Z_a_aaa1", "A")
+    return TestClient(create_app(ServiceState(context=context)))
+
+
+@pytest.mark.parametrize(
+    "path", ["/feed.xml", "/feeds/all.xml", "/audio/20260604T120000Z_a_aaa1.mp3"]
+)
+def test_feed_and_audio_require_the_token(tokened_client: TestClient, path: str):
+    assert tokened_client.get(path).status_code == 401
+
+
+@pytest.mark.parametrize(
+    "path", ["/feed.xml", "/feeds/all.xml", "/audio/20260604T120000Z_a_aaa1.mp3"]
+)
+def test_correct_feed_token_is_accepted(tokened_client: TestClient, path: str):
+    assert tokened_client.get(f"{path}?token=feed-s3cret").status_code == 200
+
+
+def test_wrong_feed_token_is_rejected(tokened_client: TestClient):
+    assert tokened_client.get("/feeds/all.xml?token=nope").status_code == 401
+
+
+def test_enclosure_urls_carry_the_token(tokened_client: TestClient):
+    """Otherwise a client could read the feed but not download any episode."""
+    body = tokened_client.get("/feeds/all.xml?token=feed-s3cret").text
+    assert "audio/20260604T120000Z_a_aaa1.mp3?token=feed-s3cret" in body
+
+
+def test_cover_art_url_carries_the_token(tokened_client: TestClient):
+    body = tokened_client.get("/feeds/all.xml?token=feed-s3cret").text
+    assert "cover.jpg?token=feed-s3cret" in body
+
+
+def test_health_stays_open_so_the_container_probe_works(tokened_client: TestClient):
+    assert tokened_client.get("/api/health").status_code == 200
+
+
+def test_no_token_configured_leaves_feeds_open(client: TestClient):
+    assert client.get("/feeds/all.xml").status_code == 200
+
+
+# --- split audio host ------------------------------------------------------
+
+
+def test_audio_base_url_overrides_the_enclosure_host(context: AppContext):
+    """Lets a public feed point at audio that stays on a private network."""
+    context.config = replace(
+        context.config,
+        server=replace(
+            context.config.server,
+            public_base_url="https://public.example.ts.net",
+            audio_base_url="http://100.64.0.1:3402",
+        ),
+    )
+    _make_episode(context.config.storage.library_path, "20260604T120000Z_a_aaa1", "A")
+    client = TestClient(create_app(ServiceState(context=context)))
+
+    body = client.get("/feeds/all.xml").text
+    assert "http://100.64.0.1:3402/audio/20260604T120000Z_a_aaa1.mp3" in body
+    # The channel link and cover still come from the public host.
+    assert "https://public.example.ts.net/cover.jpg" in body
+
+
+def test_audio_base_url_defaults_to_the_feed_host(
+    client: TestClient, context: AppContext
+):
+    _make_episode(context.config.storage.library_path, "20260604T120000Z_a_aaa1", "A")
+    body = client.get("/feeds/all.xml").text
+    assert "https://podcast.example.com/audio/20260604T120000Z_a_aaa1.mp3" in body

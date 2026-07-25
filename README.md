@@ -372,6 +372,53 @@ curl -s https://podcast.example.com/feeds/all.xml | grep enclosure
 
 Every URL in that output must be fetchable from outside your network.
 
+## Private feeds and apps that crawl server-side
+
+Some podcast apps fetch feeds from **their own servers** rather than from your
+device: Overcast, Pocket Casts, and Spotify all work this way. They cannot reach
+a LAN or tailnet address at all, so the feed has to be reachable from the public
+internet for them to work. Apps that fetch on-device (Apple Podcasts, Downcast,
+AntennaPod) have no such requirement.
+
+"Reachable from the internet" need not mean "public". Set a feed token and the
+feeds, audio, and cover art all require it, exactly like a paid private podcast:
+
+```yaml
+server:
+  public_base_url: https://podcast.example.com
+  feed_token: ${VOCAST_FEED_TOKEN}
+```
+
+```
+https://podcast.example.com/feeds/all.xml?token=YOUR_TOKEN
+```
+
+Anything without a valid token gets `401`. The token is injected into the
+enclosure and cover URLs inside the feed, so clients keep working; rotate the
+value to revoke access. `/api/health` stays open so container health checks work.
+
+A podcast client cannot send an `Authorization` header, which is why the secret
+travels in the query string. Treat the URL itself as the credential.
+
+### Keeping the audio off the public internet
+
+If the app only needs to *crawl* the feed, the episodes themselves can stay on a
+private network. `audio_base_url` points enclosures somewhere other than the
+feed's own host:
+
+```yaml
+server:
+  # Publicly reachable, so a server-side crawler can read the feed.
+  public_base_url: https://box.tailnet.ts.net
+  # Enclosures resolve only inside the tailnet, so no audio leaves it.
+  audio_base_url: http://100.64.0.1:3402
+  feed_token: ${VOCAST_FEED_TOKEN}
+```
+
+Whether this is enough depends on the app: it works only if that app downloads
+audio on the device. If episodes fail to download, drop `audio_base_url` so the
+enclosures use the public host too.
+
 ## Subscribing from a podcast app
 
 | Feed | Contents |
@@ -465,6 +512,8 @@ Environment variables follow `VOCAST_<SECTION>_<KEY>`:
 | `VOCAST_SERVER_HOST` | `127.0.0.1` |
 | `VOCAST_SERVER_PORT` | `8080` |
 | `VOCAST_SERVER_PUBLIC_BASE_URL` | derived per request |
+| `VOCAST_SERVER_FEED_TOKEN` | unset (feeds open) |
+| `VOCAST_SERVER_AUDIO_BASE_URL` | same as the feed host |
 | `VOCAST_DATABASE_PATH` | `~/.vocast/vocast.db` |
 | `VOCAST_STORAGE_LIBRARY_PATH` | `~/.vocast/library` |
 | `VOCAST_STORAGE_REQUIRE_MARKER` | `false` |

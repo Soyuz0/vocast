@@ -12,6 +12,7 @@ restart — cannot make a podcast client re-download an episode.
 
 from __future__ import annotations
 
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import format_datetime
@@ -21,6 +22,14 @@ from ..library import LibraryEntry, list_entries
 from .repository import EntryRepository, PublishedEpisode
 
 AUDIO_MIME_TYPE = "audio/mpeg"
+
+
+def with_token(url: str, token: str | None) -> str:
+    """Append `?token=` when a feed token is configured."""
+    if not token:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}token={urllib.parse.quote(token, safe='')}"
 
 
 @dataclass(frozen=True)
@@ -50,12 +59,19 @@ def collect_episodes(
     *,
     base_url: str,
     source_id: int | None = None,
+    audio_base_url: str | None = None,
+    token: str | None = None,
 ) -> list[FeedEpisode]:
     """Assemble feed items, newest first.
 
     With source_id set, only that source's episodes are returned. Otherwise
     every library entry is included, whether it came from a feed or from
     `vocast add`.
+
+    audio_base_url points enclosures somewhere other than the feed's own host,
+    so a publicly published feed can reference audio that stays private. token
+    is appended to enclosure URLs, since a podcast client can only authenticate
+    by URL.
     """
     provenance = _provenance_by_episode(entries, source_id=source_id)
 
@@ -64,18 +80,19 @@ def collect_episodes(
     else:
         library_entries = list_entries()
 
+    audio_base = audio_base_url or base_url
     episodes: list[FeedEpisode] = []
     for entry in library_entries:
         details = provenance.get(entry.id)
-        episodes.append(_to_feed_episode(entry, details, base_url))
+        episodes.append(_to_feed_episode(entry, details, audio_base, token=token))
     return episodes
 
 
 def library_entries_to_episodes(
-    entries: list[LibraryEntry], *, base_url: str
+    entries: list[LibraryEntry], *, base_url: str, token: str | None = None
 ) -> list[FeedEpisode]:
     """Render library entries as feed items with no ingestion provenance."""
-    return [_to_feed_episode(entry, None, base_url) for entry in entries]
+    return [_to_feed_episode(entry, None, base_url, token=token) for entry in entries]
 
 
 def _provenance_by_episode(
@@ -101,13 +118,15 @@ def _to_feed_episode(
     entry: LibraryEntry,
     details: PublishedEpisode | None,
     base_url: str,
+    *,
+    token: str | None = None,
 ) -> FeedEpisode:
     audio_path = entry.audio_path()
     size = audio_path.stat().st_size if audio_path.exists() else 0
     return FeedEpisode(
         episode_id=entry.id,
         title=entry.title,
-        audio_url=f"{base_url}/audio/{entry.id}.mp3",
+        audio_url=with_token(f"{base_url}/audio/{entry.id}.mp3", token),
         size_bytes=size,
         published_at=_synthesized_at(entry),
         duration_seconds=entry.duration_seconds,

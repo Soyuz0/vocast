@@ -15,7 +15,7 @@ with warnings.catch_warnings():
     warnings.filterwarnings(
         "ignore", message="Couldn't find ffmpeg or avconv", category=RuntimeWarning
     )
-    from pydub import AudioSegment  # noqa: E402
+    from pydub import AudioSegment
 
 # Use the ffmpeg binary bundled with imageio-ffmpeg so users don't need a
 # system ffmpeg install. pydub shells out to this for MP3 encoding.
