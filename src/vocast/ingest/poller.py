@@ -31,6 +31,7 @@ class SourcePollResult:
     source_name: str
     discovered: int = 0
     inserted: int = 0
+    ignored: int = 0
     error: str | None = None
     skipped: bool = False
 
@@ -126,6 +127,7 @@ class Poller:
             adapter = self._adapter_factory(
                 source, policy=self._policy, known_guids=known
             )
+            self._last_adapter = adapter
             discovered = adapter.fetch_entries()
         # Adapters wrap third-party parsers and sockets, so the failure surface
         # is open-ended. The error is recorded and returned, never discarded.
@@ -146,6 +148,8 @@ class Poller:
             return
 
         result.discovered = len(discovered)
+        if full:
+            self._reconcile_read(source, adapter, discovered, result)
         # Rows recorded before origin_name existed are labelled here rather
         # than requiring the backlog to be re-discovered.
         try:
@@ -167,6 +171,37 @@ class Poller:
                 inserted=result.inserted,
             ),
         )
+
+    def _reconcile_read(self, source, adapter, discovered, result) -> None:
+        """Skip queued articles that have since been read in the reader.
+
+        Only safe after a complete walk of the upstream stream. From a partial
+        fetch, an article's absence means "not on the pages we looked at", and
+        acting on that would ignore most of the backlog.
+        """
+        if not (source.config or {}).get("reconcile_read"):
+            return
+        if not getattr(adapter, "walk_complete", False):
+            log.info(
+                "skipping read reconciliation, upstream walk was incomplete %s",
+                kv(source_id=source.id, discovered=len(discovered)),
+            )
+            return
+        try:
+            ignored = self._entries.ignore_read_upstream(
+                source.id, {e.external_guid for e in discovered}
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "read reconciliation failed %s", kv(source_id=source.id, error=exc)
+            )
+            return
+        result.ignored = ignored
+        if ignored:
+            log.info(
+                "skipped articles already read upstream %s",
+                kv(source_id=source.id, source=source.name, ignored=ignored),
+            )
 
     def _insert(self, source: Source, feed_entry) -> Entry | None:
         try:

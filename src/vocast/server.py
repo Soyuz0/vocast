@@ -54,7 +54,7 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
 
     @app.api_route("/audio/{entry_id}.mp3", methods=["GET", "HEAD"])
-    def audio(entry_id: str, token: str | None = None) -> Response:
+    def audio(request: Request, entry_id: str, token: str | None = None) -> Response:
         if state is not None:
             state.require_feed_token(token)
         entry = get_entry(entry_id)
@@ -63,6 +63,8 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         path = entry.audio_path()
         if not path.exists():
             return PlainTextResponse("audio missing", status_code=404)
+        if state is not None and not _is_probe(request):
+            state.record_download(entry_id)
         return FileResponse(path, media_type="audio/mpeg")
 
     @app.api_route("/cover.jpg", methods=["GET", "HEAD"])
@@ -86,6 +88,24 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         app.include_router(create_router(state))
 
     return app
+
+
+def _is_probe(request: Request) -> bool:
+    """Whether this request is a client checking rather than downloading.
+
+    HEAD requests and small range probes are how clients read metadata or test
+    resumability; treating those as a download would mark articles consumed
+    that were never fetched.
+    """
+    if request.method.upper() == "HEAD":
+        return True
+    span = request.headers.get("range", "")
+    if not span.startswith("bytes="):
+        return False
+    first, _, last = span[len("bytes=") :].partition("-")
+    if not first.isdigit() or not last.isdigit():
+        return False
+    return (int(last) - int(first)) < 65536
 
 
 def _base_url(state: ServiceState | None, request: Request) -> str:

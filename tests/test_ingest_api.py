@@ -507,3 +507,130 @@ def test_pause_requires_the_admin_token_when_configured(
     guarded_client: TestClient,
 ):
     assert guarded_client.post("/api/worker/pause").status_code == 401
+
+
+# --- download tracking and read sync ---------------------------------------
+
+
+@pytest.fixture
+def downloadable(context: AppContext) -> int:
+    _make_episode(context.config.storage.library_path, "20260604T120000Z_a_aaa1", "A")
+    source = context.sources.add(
+        name="FreshRSS",
+        kind="freshrss_api",
+        url="https://freshrss.example.com",
+        config={"username": "u", "api_password": "p"},
+    )
+    entry = context.entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="tag:google.com,2005:reader/item/abc",
+            title="A",
+            article_url="https://example.com/a",
+            published_at=utcnow(),
+        )
+    )
+    context.entries.mark_ready(
+        entry.id,
+        episode_id="20260604T120000Z_a_aaa1",
+        duration_seconds=60.0,
+        audio_bytes=8,
+    )
+    return entry.id
+
+
+def test_download_is_recorded(client: TestClient, context: AppContext, downloadable):
+    assert client.get("/audio/20260604T120000Z_a_aaa1.mp3").status_code == 200
+    assert context.entries.get(downloadable).downloaded_at is not None
+
+
+def test_head_request_is_not_a_download(
+    client: TestClient, context: AppContext, downloadable
+):
+    """Clients probe with HEAD for metadata; that is not consumption."""
+    client.head("/audio/20260604T120000Z_a_aaa1.mp3")
+    assert context.entries.get(downloadable).downloaded_at is None
+
+
+def test_small_range_probe_is_not_a_download(
+    client: TestClient, context: AppContext, downloadable
+):
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3", headers={"Range": "bytes=0-1023"})
+    assert context.entries.get(downloadable).downloaded_at is None
+
+
+def test_download_time_is_not_overwritten_by_a_refetch(
+    client: TestClient, context: AppContext, downloadable
+):
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3")
+    first = context.entries.get(downloadable).downloaded_at
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3")
+    assert context.entries.get(downloadable).downloaded_at == first
+
+
+def test_no_upstream_write_unless_enabled(
+    client: TestClient, context: AppContext, downloadable
+):
+    """Marking read changes state in another application, so it is opt-in."""
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3")
+    assert context.entries.get(downloadable).marked_read_at is None
+
+
+# --- hiding downloaded episodes --------------------------------------------
+
+
+def test_downloaded_episode_leaves_the_feed_after_the_delay(
+    context: AppContext, downloadable
+):
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, hide_after_download_hours=24),
+    )
+    client = TestClient(create_app(ServiceState(context=context)))
+    assert len(_feed_items(client)) == 1
+
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3")
+    assert len(_feed_items(client)) == 1, "must stay while the delay has not elapsed"
+
+    with context.db.transaction() as conn:
+        conn.execute(
+            "UPDATE entries SET downloaded_at = ? WHERE id = ?",
+            ("2020-01-01T00:00:00+00:00", downloadable),
+        )
+    assert _feed_items(client) == []
+
+
+def test_episodes_stay_listed_when_hiding_is_off(
+    client: TestClient, context: AppContext, downloadable
+):
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3")
+    with context.db.transaction() as conn:
+        conn.execute(
+            "UPDATE entries SET downloaded_at = ? WHERE id = ?",
+            ("2020-01-01T00:00:00+00:00", downloadable),
+        )
+    assert len(_feed_items(client)) == 1
+
+
+def test_hidden_episode_audio_is_still_served(context: AppContext, downloadable):
+    """The files are kept; only the listing changes."""
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, hide_after_download_hours=1),
+    )
+    client = TestClient(create_app(ServiceState(context=context)))
+    with context.db.transaction() as conn:
+        conn.execute(
+            "UPDATE entries SET downloaded_at = ? WHERE id = ?",
+            ("2020-01-01T00:00:00+00:00", downloadable),
+        )
+    assert _feed_items(client) == []
+    assert client.get("/audio/20260604T120000Z_a_aaa1.mp3").status_code == 200
+
+
+def _feed_items(client: TestClient):
+    from xml.etree import ElementTree
+
+    return ElementTree.fromstring(client.get("/feeds/all.xml").text).findall(
+        "./channel/item"
+    )

@@ -81,6 +81,10 @@ class FreshRSSAPIAdapter:
         )
         self._auth_token: str | None = None
         self._feed_icons: dict[str, str] = {}
+        #: True only when the last fetch reached the end of the stream. Anything
+        #: that reconciles "what is still unread upstream" must check this: from
+        #: a partial walk, absence proves nothing.
+        self.walk_complete = False
 
     @property
     def source(self) -> Source:
@@ -99,6 +103,7 @@ class FreshRSSAPIAdapter:
 
         token = self._client_login(str(username), str(password))
         self._feed_icons = self._load_feed_icons(token)
+        self.walk_complete = False
         return self._collect(token)
 
     # -- authentication ----------------------------------------------------
@@ -200,6 +205,7 @@ class FreshRSSAPIAdapter:
             payload = self._request_page(token, page_size, continuation)
             items = payload.get("items") or []
             if not items:
+                self.walk_complete = True
                 break
 
             page_entries = [e for e in map(self._to_entry, items) if e is not None]
@@ -211,16 +217,19 @@ class FreshRSSAPIAdapter:
                 entries.append(entry)
 
             if max_entries is not None and len(entries) >= max_entries:
+                # Truncated by the cap, so the stream was not exhausted.
                 return entries[:max_entries]
 
             # Steady state: the stream is newest-crawled first, so once a whole
             # page is already known, everything deeper is too. Without this,
             # every poll would re-download the entire backlog.
             if fresh == 0 and self._known_guids is not None:
+                # Stopped early on purpose; deeper pages were never seen.
                 break
 
             continuation = payload.get("continuation")
             if not continuation:
+                self.walk_complete = True
                 break
 
         return entries

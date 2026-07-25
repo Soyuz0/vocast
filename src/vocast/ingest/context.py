@@ -15,6 +15,7 @@ from .db import Database, open_database
 from .logs import get_logger, kv
 from .nethttp import FetchPolicy
 from .repository import (
+    ConsumptionRepository,
     DuplicateSourceError,
     EntryRepository,
     SettingsRepository,
@@ -31,6 +32,7 @@ class AppContext:
     sources: SourceRepository
     entries: EntryRepository
     settings: SettingsRepository
+    consumption: ConsumptionRepository
 
     @classmethod
     def create(cls, config: Config | None = None) -> AppContext:
@@ -44,6 +46,7 @@ class AppContext:
             sources=SourceRepository(db),
             entries=EntryRepository(db),
             settings=SettingsRepository(db),
+            consumption=ConsumptionRepository(db),
         )
 
     def fetch_policy(self) -> FetchPolicy:

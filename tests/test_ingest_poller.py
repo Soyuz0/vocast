@@ -9,7 +9,7 @@ from typing import ClassVar
 import pytest
 
 from vocast.ingest.db import Database, open_database
-from vocast.ingest.models import FeedEntry, Source
+from vocast.ingest.models import EntryStatus, FeedEntry, Source
 from vocast.ingest.poller import Poller
 from vocast.ingest.repository import EntryRepository, SourceRepository
 from vocast.ingest.timeutils import utcnow
@@ -266,3 +266,140 @@ def test_full_poll_disables_the_adapter_early_stop(
 
     assert seen_kwargs[0] is not None, "routine poll should allow early-stop"
     assert seen_kwargs[1] is None, "full poll must disable early-stop"
+
+
+# --- reconciling articles read upstream ------------------------------------
+
+
+class CompleteWalkAdapter:
+    """Reports a full walk of the upstream stream."""
+
+    scripts: ClassVar[dict[int, list[tuple[str, str]]]] = {}
+    walk_complete = True
+
+    def __init__(self, src: Source, **_: object) -> None:
+        self.source = src
+
+    def fetch_entries(self) -> list[FeedEntry]:
+        return [
+            FeedEntry(
+                source_id=self.source.id,
+                external_guid=guid,
+                title=guid,
+                article_url=url,
+                published_at=utcnow(),
+            )
+            for guid, url in self.scripts.get(self.source.id, [])
+        ]
+
+
+class PartialWalkAdapter(CompleteWalkAdapter):
+    """Stopped early, so absence from its results proves nothing."""
+
+    walk_complete = False
+
+
+def _source_with_reconcile(sources: SourceRepository) -> Source:
+    return sources.add(
+        name="FreshRSS",
+        kind="freshrss_api",
+        url="https://freshrss.example.com",
+        config={"reconcile_read": True},
+    )
+
+
+def test_pending_article_read_upstream_is_skipped(
+    sources: SourceRepository, entries: EntryRepository
+):
+    source = _source_with_reconcile(sources)
+    CompleteWalkAdapter.scripts = {
+        source.id: [("a", "https://example.com/a"), ("b", "https://example.com/b")]
+    }
+    poller = Poller(
+        sources=sources, entries=entries, adapter_factory=CompleteWalkAdapter
+    )
+    poller.poll_source(source, full=True)
+    assert len(entries.all()) == 2
+
+    # "b" has been read in the reader, so it leaves the unread stream.
+    CompleteWalkAdapter.scripts = {source.id: [("a", "https://example.com/a")]}
+    result = poller.poll_source(source, full=True)
+
+    assert result.ignored == 1
+    statuses = {e.external_guid: e.status for e in entries.all()}
+    assert statuses["a"] is EntryStatus.PENDING
+    assert statuses["b"] is EntryStatus.IGNORED
+
+
+def test_partial_walk_never_ignores_anything(
+    sources: SourceRepository, entries: EntryRepository
+):
+    """The dangerous case: from one page of a large backlog, almost every
+    queued article looks absent."""
+    source = _source_with_reconcile(sources)
+    PartialWalkAdapter.scripts = {
+        source.id: [(f"g{i}", f"https://example.com/{i}") for i in range(5)]
+    }
+    poller = Poller(
+        sources=sources, entries=entries, adapter_factory=PartialWalkAdapter
+    )
+    poller.poll_source(source, full=True)
+
+    # Now the adapter only sees one of them.
+    PartialWalkAdapter.scripts = {source.id: [("g0", "https://example.com/0")]}
+    result = poller.poll_source(source, full=True)
+
+    assert result.ignored == 0
+    assert all(e.status is EntryStatus.PENDING for e in entries.all())
+
+
+def test_routine_poll_does_not_reconcile(
+    sources: SourceRepository, entries: EntryRepository
+):
+    source = _source_with_reconcile(sources)
+    CompleteWalkAdapter.scripts = {
+        source.id: [("a", "https://example.com/a"), ("b", "https://example.com/b")]
+    }
+    poller = Poller(
+        sources=sources, entries=entries, adapter_factory=CompleteWalkAdapter
+    )
+    poller.poll_source(source, full=True)
+
+    CompleteWalkAdapter.scripts = {source.id: [("a", "https://example.com/a")]}
+    result = poller.poll_source(source)  # not full
+
+    assert result.ignored == 0
+    assert all(e.status is EntryStatus.PENDING for e in entries.all())
+
+
+def test_reconciliation_is_opt_in(sources: SourceRepository, entries: EntryRepository):
+    source = sources.add(
+        name="FreshRSS", kind="freshrss_api", url="https://freshrss.example.com"
+    )
+    CompleteWalkAdapter.scripts = {source.id: [("a", "https://example.com/a")]}
+    poller = Poller(
+        sources=sources, entries=entries, adapter_factory=CompleteWalkAdapter
+    )
+    poller.poll_source(source, full=True)
+
+    CompleteWalkAdapter.scripts = {source.id: []}
+    assert poller.poll_source(source, full=True).ignored == 0
+
+
+def test_already_narrated_articles_are_not_touched(
+    sources: SourceRepository, entries: EntryRepository
+):
+    """Only pending work is skipped; finished episodes stay in the feed."""
+    source = _source_with_reconcile(sources)
+    CompleteWalkAdapter.scripts = {source.id: [("a", "https://example.com/a")]}
+    poller = Poller(
+        sources=sources, entries=entries, adapter_factory=CompleteWalkAdapter
+    )
+    poller.poll_source(source, full=True)
+    [entry] = entries.all()
+    entries.mark_ready(entry.id, episode_id="ep-1")
+
+    CompleteWalkAdapter.scripts = {source.id: []}
+    poller.poll_source(source, full=True)
+
+    assert entries.get(entry.id).status is EntryStatus.READY

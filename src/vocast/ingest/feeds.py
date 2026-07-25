@@ -64,6 +64,7 @@ def collect_episodes(
     audio_base_url: str | None = None,
     token: str | None = None,
     max_items: int | None = None,
+    hide_downloaded_before: datetime | None = None,
 ) -> list[FeedEpisode]:
     """Assemble feed items, newest published first.
 
@@ -75,7 +76,12 @@ def collect_episodes(
     handle, tens of thousands of items -- especially with article text inlined.
     """
     audio_base = audio_base_url or base_url
-    provenance = _provenance_by_episode(entries, source_id=source_id, limit=max_items)
+    provenance = _provenance_by_episode(
+        entries,
+        source_id=source_id,
+        limit=max_items,
+        hide_downloaded_before=hide_downloaded_before,
+    )
 
     episodes: list[FeedEpisode] = []
     seen: set[str] = set()
@@ -96,9 +102,12 @@ def collect_episodes(
 
     if source_id is None:
         # Episodes added by hand have no database row, so they still need a
-        # library scan -- bounded by the same cap.
+        # library scan -- bounded by the same cap. Excluded ids come from every
+        # tracked episode, not just the ones published above: one filtered out
+        # for having been downloaded must not reappear as an untracked episode.
+        managed = entries.tracked_episode_ids() if entries is not None else set()
         for entry in list_entries(limit=max_items):
-            if entry.id in seen:
+            if entry.id in seen or entry.id in managed:
                 continue
             episodes.append(_to_feed_episode(entry, None, audio_base, token=token))
 
@@ -119,11 +128,19 @@ def library_entries_to_episodes(
 
 
 def _provenance_by_episode(
-    entries: EntryRepository | None, *, source_id: int | None, limit: int | None
+    entries: EntryRepository | None,
+    *,
+    source_id: int | None,
+    limit: int | None,
+    hide_downloaded_before: datetime | None = None,
 ) -> list[PublishedEpisode]:
     if entries is None:
         return []
-    return entries.published_episodes(source_id=source_id, limit=limit)
+    return entries.published_episodes(
+        source_id=source_id,
+        limit=limit,
+        hide_downloaded_before=hide_downloaded_before,
+    )
 
 
 def _from_details(

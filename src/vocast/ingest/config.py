@@ -14,10 +14,13 @@ Environment variable convention
     VOCAST_SERVER_FEED_TOKEN
     VOCAST_SERVER_AUDIO_BASE_URL
     VOCAST_SERVER_FEED_MAX_ITEMS
+    VOCAST_SERVER_HIDE_AFTER_DOWNLOAD_HOURS
+    VOCAST_FRESHRSS_MARK_READ_ON_DOWNLOAD
     VOCAST_DATABASE_PATH
     VOCAST_STORAGE_LIBRARY_PATH
     VOCAST_STORAGE_REQUIRE_MARKER
     VOCAST_POLLING_DEFAULT_INTERVAL_MINUTES
+    VOCAST_POLLING_FULL_POLL_HOURS
     VOCAST_WORKER_CONCURRENCY
     VOCAST_WORKER_PROCESSING_TIMEOUT_MINUTES
     VOCAST_WORKER_MAX_RETRIES
@@ -78,6 +81,14 @@ class ServerConfig:
     #: feed be published on a public endpoint while the audio it points at stays
     #: on a private network, so only titles ever leave.
     audio_base_url: str | None = None
+    #: Drop episodes from the feed this many hours after their audio was
+    #: downloaded. The files are kept. None keeps everything listed.
+    #:
+    #: This is "downloaded N hours ago", not "listened to": a podcast client
+    #: never reports playback back. Set the delay long enough that a download
+    #: reliably implies you have heard it, and note that clients report an
+    #: episode leaving the feed as withdrawn by the publisher.
+    hide_after_download_hours: int | None = None
     #: Most recent episodes to include in a feed. Podcast clients neither want
     #: nor reliably handle tens of thousands of items, and every item costs a
     #: metadata read. None means no limit.
@@ -107,6 +118,11 @@ class StorageConfig:
 @dataclass(frozen=True)
 class PollingConfig:
     default_interval_minutes: int = 15
+    #: How often to walk a source's upstream stream completely, rather than
+    #: stopping at the first page of already-known articles. Only a complete
+    #: walk can tell that a queued article has since been read upstream. 0
+    #: disables it.
+    full_poll_hours: int = 0
 
 
 @dataclass(frozen=True)
@@ -147,6 +163,16 @@ class RetentionConfig:
 
 
 @dataclass(frozen=True)
+class FreshRSSConfig:
+    """Writing back to FreshRSS. Reading from it needs nothing here."""
+
+    #: Mark an article read once its episode audio has been downloaded. Off by
+    #: default: it changes state in another application, and a client that
+    #: downloads eagerly would mark things read before you hear them.
+    mark_read_on_download: bool = False
+
+
+@dataclass(frozen=True)
 class TTSConfig:
     engine: str = "kokoro"
     voice: str | None = None
@@ -171,6 +197,7 @@ class Config:
     polling: PollingConfig = field(default_factory=PollingConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
+    freshrss: FreshRSSConfig = field(default_factory=FreshRSSConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     sources: tuple[SourceConfig, ...] = ()
     admin_token: str | None = None
@@ -274,6 +301,7 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
     worker = _section(raw, "worker")
     retention = _section(raw, "retention")
     tts = _section(raw, "tts")
+    freshrss = _section(raw, "freshrss")
 
     return Config(
         server=ServerConfig(
@@ -282,6 +310,11 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
             public_base_url=_clean_base_url(server.get("public_base_url")),
             feed_token=_as_optional_str(server.get("feed_token")),
             audio_base_url=_clean_base_url(server.get("audio_base_url")),
+            hide_after_download_hours=_as_optional_int(
+                server.get("hide_after_download_hours"),
+                ServerConfig.hide_after_download_hours,
+                "server.hide_after_download_hours",
+            ),
             feed_max_items=_as_optional_int(
                 server.get("feed_max_items"),
                 ServerConfig.feed_max_items,
@@ -307,7 +340,13 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 PollingConfig.default_interval_minutes,
                 "polling.default_interval_minutes",
                 minimum=1,
-            )
+            ),
+            full_poll_hours=_as_int(
+                polling.get("full_poll_hours"),
+                PollingConfig.full_poll_hours,
+                "polling.full_poll_hours",
+                minimum=0,
+            ),
         ),
         worker=WorkerConfig(
             concurrency=_as_int(
@@ -377,6 +416,13 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 "retention.include_manual",
             ),
         ),
+        freshrss=FreshRSSConfig(
+            mark_read_on_download=_as_bool(
+                freshrss.get("mark_read_on_download"),
+                FreshRSSConfig.mark_read_on_download,
+                "freshrss.mark_read_on_download",
+            ),
+        ),
         tts=TTSConfig(
             engine=str(tts.get("engine", TTSConfig.engine)),
             voice=_as_optional_str(tts.get("voice")),
@@ -435,6 +481,18 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_SERVER_FEED_TOKEN", "server", "feed_token", "opt_str"),
     ("VOCAST_SERVER_AUDIO_BASE_URL", "server", "audio_base_url", "base_url"),
     ("VOCAST_SERVER_FEED_MAX_ITEMS", "server", "feed_max_items", "opt_int"),
+    (
+        "VOCAST_SERVER_HIDE_AFTER_DOWNLOAD_HOURS",
+        "server",
+        "hide_after_download_hours",
+        "opt_int",
+    ),
+    (
+        "VOCAST_FRESHRSS_MARK_READ_ON_DOWNLOAD",
+        "freshrss",
+        "mark_read_on_download",
+        "bool",
+    ),
     ("VOCAST_DATABASE_PATH", "database", "path", "path"),
     ("VOCAST_STORAGE_LIBRARY_PATH", "storage", "library_path", "path"),
     ("VOCAST_STORAGE_REQUIRE_MARKER", "storage", "require_marker", "bool"),
@@ -444,6 +502,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
         "default_interval_minutes",
         "int",
     ),
+    ("VOCAST_POLLING_FULL_POLL_HOURS", "polling", "full_poll_hours", "int"),
     ("VOCAST_WORKER_CONCURRENCY", "worker", "concurrency", "int"),
     (
         "VOCAST_WORKER_PROCESSING_TIMEOUT_MINUTES",

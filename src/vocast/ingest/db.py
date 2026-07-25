@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -97,12 +97,22 @@ ALTER TABLE entries ADD COLUMN duration_seconds REAL;
 ALTER TABLE entries ADD COLUMN audio_bytes INTEGER;
 """
 
+# When an episode's audio was fetched, and when the upstream article was marked
+# read as a result. Downloading is the only signal a podcast client gives us --
+# playback position is never reported back -- so it stands in for "consumed".
+_SCHEMA_V6 = """
+ALTER TABLE entries ADD COLUMN downloaded_at TEXT;
+ALTER TABLE entries ADD COLUMN marked_read_at TEXT;
+CREATE INDEX idx_entries_downloaded ON entries(downloaded_at);
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
     (3, _SCHEMA_V3),
     (4, _SCHEMA_V4),
     (5, _SCHEMA_V5),
+    (6, _SCHEMA_V6),
 ]
 
 

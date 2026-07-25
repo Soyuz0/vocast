@@ -56,6 +56,7 @@ class Service:
         self.context = context
         self.state = ServiceState(context=context)
         self._poller_loop: IntervalLoop | None = None
+        self._full_poll_loop: IntervalLoop | None = None
         self._retention_loop: IntervalLoop | None = None
         self._worker_loops: list[WorkerLoop] = []
         self._with_poller = with_poller
@@ -74,6 +75,17 @@ class Service:
             self._poller_loop = build_poller_loop(poller)
             self._poller_loop.start()
             self.state.poller_running = True
+
+        if self._with_poller and config.polling.full_poll_hours:
+            self._full_poll_loop = IntervalLoop(
+                self._full_poll,
+                interval_seconds=config.polling.full_poll_hours * 3600,
+                name="vocast-full-poll",
+                # Not on startup: the routine poller is already running and a
+                # full walk of a large backlog is expensive.
+                run_immediately=False,
+            )
+            self._full_poll_loop.start()
 
         if config.retention.enabled:
             self._retention_loop = self._build_retention_loop()
@@ -113,6 +125,25 @@ class Service:
                 loop.start()
                 self._worker_loops.append(loop)
             self.state.worker_running = True
+
+    def _full_poll(self) -> None:
+        """Walk every source completely, so read reconciliation can run."""
+        poller = Poller(
+            sources=self.context.sources,
+            entries=self.context.entries,
+            policy=self.context.fetch_policy(),
+        )
+        for source in self.context.sources.all(enabled_only=True):
+            result = poller.poll_source(source, full=True)
+            if result.inserted or result.ignored:
+                log.info(
+                    "full poll %s",
+                    kv(
+                        source_id=source.id,
+                        inserted=result.inserted,
+                        ignored=result.ignored,
+                    ),
+                )
 
     def _build_retention_loop(self) -> IntervalLoop:
         retention = Retention(
@@ -167,6 +198,9 @@ class Service:
         if self._poller_loop is not None:
             self._poller_loop.stop()
             self.state.poller_running = False
+        if self._full_poll_loop is not None:
+            self._full_poll_loop.stop()
+            self._full_poll_loop = None
         if self._retention_loop is not None:
             self._retention_loop.stop()
             self._retention_loop = None

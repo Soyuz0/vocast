@@ -25,8 +25,8 @@ _SOURCE_COLUMNS = """
 _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
     origin_name, origin_image_url, status, vocast_episode_id, content_hash,
-    duration_seconds, audio_bytes, retry_count, next_retry_at, claimed_at,
-    error_message, created_at, updated_at
+    duration_seconds, audio_bytes, downloaded_at, marked_read_at, retry_count,
+    next_retry_at, claimed_at, error_message, created_at, updated_at
 """
 
 
@@ -535,7 +535,11 @@ class EntryRepository:
         return counts
 
     def published_episodes(
-        self, *, source_id: int | None = None, limit: int | None = None
+        self,
+        *,
+        source_id: int | None = None,
+        limit: int | None = None,
+        hide_downloaded_before: datetime | None = None,
     ) -> list[PublishedEpisode]:
         """Ready episodes joined to their source, newest first.
 
@@ -555,6 +559,11 @@ class EntryRepository:
         if source_id is not None:
             clauses.append("e.source_id = ?")
             params.append(source_id)
+        if hide_downloaded_before is not None:
+            # Downloaded long enough ago to assume it has been heard. The audio
+            # stays on disk; it just stops being advertised.
+            clauses.append("(e.downloaded_at IS NULL OR e.downloaded_at > ?)")
+            params.append(to_iso(hide_downloaded_before))
         with self._db.reading() as conn:
             rows = conn.execute(
                 f"""
@@ -637,6 +646,52 @@ class EntryRepository:
                 found.update(r["external_guid"] for r in rows)
         return found
 
+    def ignore_read_upstream(self, source_id: int, keep_guids: set[str]) -> int:
+        """Mark pending entries absent from `keep_guids` as ignored.
+
+        Used to skip articles read in the reader since they were queued. The
+        caller must pass a *complete* set of upstream unread guids: derived from
+        a partial fetch this would ignore most of the backlog.
+        """
+        now = to_iso(utcnow())
+        ignored = 0
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT id, external_guid FROM entries "
+                "WHERE source_id = ? AND status = ?",
+                (source_id, EntryStatus.PENDING.value),
+            ).fetchall()
+            stale = [r["id"] for r in rows if r["external_guid"] not in keep_guids]
+            for start in range(0, len(stale), 500):
+                batch = stale[start : start + 500]
+                placeholders = ",".join("?" * len(batch))
+                cur = conn.execute(
+                    f"""
+                    UPDATE entries
+                    SET status = ?, updated_at = ?,
+                        error_message = 'read upstream before narration'
+                    WHERE id IN ({placeholders})
+                    """,
+                    (EntryStatus.IGNORED.value, now, *batch),
+                )
+                ignored += cur.rowcount
+        return ignored
+
+    def tracked_episode_ids(self) -> set[str]:
+        """Every episode id this database knows about, whatever its state.
+
+        The combined feed also lists episodes added by hand, which have no row
+        here. Distinguishing those needs *all* tracked ids, not just the ones
+        currently being published: an episode filtered out for being already
+        downloaded would otherwise look unmanaged and be listed again.
+        """
+        with self._db.reading() as conn:
+            rows = conn.execute(
+                "SELECT vocast_episode_id FROM entries "
+                "WHERE vocast_episode_id IS NOT NULL"
+            ).fetchall()
+        return {r["vocast_episode_id"] for r in rows}
+
     def find_by_episode_id(self, episode_id: str) -> Entry | None:
         with self._db.reading() as conn:
             row = conn.execute(
@@ -712,3 +767,44 @@ class SettingsRepository:
 
     def pause_worker(self, paused: bool) -> None:
         self.set_bool(self.WORKER_PAUSED, paused)
+
+
+class ConsumptionRepository:
+    """Tracks what has been downloaded, and what that implied upstream.
+
+    Separate from EntryRepository because this is the one place that records
+    listener behaviour rather than pipeline state.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def record_download(self, episode_id: str) -> Entry | None:
+        """Note that an episode's audio was fetched. First fetch wins.
+
+        Returns the entry when this was the first download, else None, so a
+        caller can act once (marking the article read) without repeating it on
+        every subsequent range request or re-download.
+        """
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                """
+                UPDATE entries SET downloaded_at = ?
+                WHERE vocast_episode_id = ? AND downloaded_at IS NULL
+                """,
+                (to_iso(utcnow()), episode_id),
+            )
+            if cur.rowcount == 0:
+                return None
+            row = conn.execute(
+                f"SELECT {_ENTRY_COLUMNS} FROM entries WHERE vocast_episode_id = ?",
+                (episode_id,),
+            ).fetchone()
+        return Entry.from_row(row) if row else None
+
+    def mark_read_upstream(self, entry_id: int) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE entries SET marked_read_at = ? WHERE id = ?",
+                (to_iso(utcnow()), entry_id),
+            )

@@ -105,6 +105,8 @@ class Entry:
     origin_image_url: str | None
     duration_seconds: float | None
     audio_bytes: int | None
+    downloaded_at: datetime | None
+    marked_read_at: datetime | None
     status: EntryStatus
     vocast_episode_id: str | None
     content_hash: str | None
@@ -129,6 +131,8 @@ class Entry:
             origin_image_url=row["origin_image_url"],
             duration_seconds=row["duration_seconds"],
             audio_bytes=row["audio_bytes"],
+            downloaded_at=from_iso(row["downloaded_at"]),
+            marked_read_at=from_iso(row["marked_read_at"]),
             status=EntryStatus(row["status"]),
             vocast_episode_id=row["vocast_episode_id"],
             content_hash=row["content_hash"],

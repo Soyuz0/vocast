@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -17,11 +18,13 @@ from pydantic import BaseModel, Field
 from .adapters import supported_kinds
 from .context import AppContext
 from .feeds import FeedChannel, build_podcast_rss, collect_episodes, with_token
+from .freshrss_writer import FreshRSSWriter, mark_read_in_background
 from .logs import get_logger, kv
-from .models import EntryStatus
+from .models import EntryStatus, SourceKind
 from .nethttp import BlockedURLError, validate_url
 from .poller import Poller
 from .repository import DuplicateSourceError
+from .timeutils import utcnow
 
 log = get_logger("api")
 
@@ -52,6 +55,39 @@ class ServiceState:
     @property
     def feed_token(self) -> str | None:
         return self.context.config.server.feed_token
+
+    def hide_downloaded_before(self) -> datetime | None:
+        """Cutoff for dropping already-downloaded episodes from the feed."""
+        hours = self.context.config.server.hide_after_download_hours
+        if not hours:
+            return None
+        return utcnow() - timedelta(hours=hours)
+
+    def record_download(self, episode_id: str) -> None:
+        """Note an episode was fetched, and mark it read upstream if configured.
+
+        Deliberately tolerant: this runs on the request that serves audio, so
+        nothing here may raise or add latency.
+        """
+        try:
+            entry = self.context.consumption.record_download(episode_id)
+        except Exception:
+            log.exception("could not record the download of %s", episode_id)
+            return
+        if entry is None:
+            return  # already recorded; only the first fetch acts
+        if not self.context.config.freshrss.mark_read_on_download:
+            return
+        source = self.context.sources.get(entry.source_id)
+        if source is None or source.kind != SourceKind.FRESHRSS_API.value:
+            return
+        writer = FreshRSSWriter(source, policy=self.context.fetch_policy())
+        mark_read_in_background(
+            writer,
+            entry.id,
+            entry.external_guid,
+            self.context.consumption.mark_read_upstream,
+        )
 
     def audio_base_url(self, request: Request) -> str:
         """Where enclosures should point, which may differ from the feed host."""
@@ -133,6 +169,7 @@ def _render_feed(
         audio_base_url=state.audio_base_url(request),
         token=state.feed_token,
         max_items=state.context.config.server.feed_max_items,
+        hide_downloaded_before=state.hide_downloaded_before(),
     )
     title = f"vocast — {source_name}" if source_name else "vocast"
     description = (
