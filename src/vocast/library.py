@@ -166,7 +166,22 @@ def list_entries() -> list[LibraryEntry]:
     return entries
 
 
+_SAFE_ENTRY_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def is_valid_entry_id(entry_id: str) -> bool:
+    """Whether an id can only ever name a directory inside the library.
+
+    Entry ids arrive from URL paths, so they are untrusted. A separator or a
+    parent reference would let `LIBRARY_PATH / entry_id` escape the library --
+    an absolute id escapes outright, since pathlib discards the left operand.
+    """
+    return bool(_SAFE_ENTRY_ID.match(entry_id)) and ".." not in entry_id
+
+
 def get_entry(entry_id: str) -> LibraryEntry | None:
+    if not is_valid_entry_id(entry_id):
+        return None
     meta = LIBRARY_PATH / entry_id / "meta.json"
     if not meta.exists():
         return None

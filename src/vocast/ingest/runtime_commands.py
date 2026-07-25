@@ -113,3 +113,36 @@ def cmd_worker(args: argparse.Namespace) -> int:
     finally:
         loop.stop()
     return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run the HTTP server, the poller, and the worker in one process."""
+    from .config import load_config
+    from .logs import configure_logging
+    from .service import run_service
+
+    config = load_config(getattr(args, "config", None))
+    if getattr(args, "db", None):
+        from dataclasses import replace
+        from pathlib import Path
+
+        config = replace(
+            config, database=replace(config.database, path=Path(args.db).expanduser())
+        )
+    configure_logging(config.log_level)
+
+    host = args.host or config.server.host
+    port = args.port or config.server.port
+    print(f"vocast running on http://{host}:{port}")
+    print(f"  combined feed: http://{host}:{port}/feeds/all.xml")
+    print(f"  health:        http://{host}:{port}/api/health")
+    if config.server.public_base_url:
+        print(f"  public feed:   {config.server.public_base_url}/feeds/all.xml")
+
+    return run_service(
+        config,
+        host=args.host,
+        port=args.port,
+        with_poller=not args.no_poller,
+        with_worker=not args.no_worker,
+    )

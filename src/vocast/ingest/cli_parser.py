@@ -135,7 +135,7 @@ def _register_entry(sub: argparse._SubParsersAction) -> None:
 
 
 def _register_runtime(sub: argparse._SubParsersAction) -> None:
-    from .runtime_commands import cmd_poll, cmd_worker
+    from .runtime_commands import cmd_poll, cmd_run, cmd_worker
 
     poll = sub.add_parser("poll", help="fetch sources once and queue new articles")
     poll.add_argument(
@@ -164,6 +164,18 @@ def _register_runtime(sub: argparse._SubParsersAction) -> None:
     )
     _add_common(worker)
     worker.set_defaults(func=cmd_worker)
+
+    run = sub.add_parser("run", help="run the server, poller, and worker together")
+    run.add_argument("--host", default=None, help="bind host (default: from config)")
+    run.add_argument("--port", type=int, default=None, help="bind port")
+    run.add_argument(
+        "--no-worker", action="store_true", help="serve and poll without synthesizing"
+    )
+    run.add_argument(
+        "--no-poller", action="store_true", help="serve and synthesize without polling"
+    )
+    _add_common(run)
+    run.set_defaults(func=cmd_run)
 
 
 def _register_config(sub: argparse._SubParsersAction) -> None:

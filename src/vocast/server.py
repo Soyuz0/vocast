@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from email.utils import format_datetime
 from importlib.resources import files
-from xml.sax.saxutils import escape
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.responses import (
@@ -17,25 +15,40 @@ from fastapi.responses import (
 
 from .library import LibraryEntry, get_entry, list_entries
 
+if TYPE_CHECKING:
+    from .ingest.api import ServiceState
+
 try:
     _SHOW_COVER = files("vocast").joinpath("assets/default_cover.jpg").read_bytes()
 except (FileNotFoundError, OSError):
     _SHOW_COVER = b""
 
 
-def create_app() -> FastAPI:
+def create_app(state: ServiceState | None = None) -> FastAPI:
+    """Build the app.
+
+    Without a ServiceState the app serves only the library, which is what plain
+    `vocast serve` needs. With one, the ingestion feeds, health endpoint, and
+    admin API are mounted too.
+    """
     app = FastAPI(title="vocast", docs_url=None, redoc_url=None)
 
     @app.get("/")
     def index() -> Response:
         n = len(list_entries())
         suffix = "s" if n != 1 else ""
-        return PlainTextResponse(f"vocast — {n} article{suffix}\nfeed: /feed.xml\n")
+        lines = [f"vocast — {n} article{suffix}", "feed: /feed.xml"]
+        if state is not None:
+            lines.append("all sources: /feeds/all.xml")
+            lines.append("health: /api/health")
+        return PlainTextResponse("\n".join(lines) + "\n")
 
     @app.api_route("/feed.xml", methods=["GET", "HEAD"])
     def feed(request: Request) -> Response:
-        base = str(request.base_url).rstrip("/")
-        xml = _build_rss(list_entries(), base)
+        """The original feed. An alias for /feeds/all.xml once ingestion is on,
+        so a subscriber added before RSS support keeps getting every episode."""
+        base = _base_url(state, request)
+        xml = _render_all(state, base)
         return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
 
     @app.api_route("/audio/{entry_id}.mp3", methods=["GET", "HEAD"])
@@ -61,53 +74,78 @@ def create_app() -> FastAPI:
     def site_icon() -> Response:
         return RedirectResponse("/cover.jpg")
 
+    if state is not None:
+        from .ingest.api import create_router
+
+        app.include_router(create_router(state))
+
     return app
 
 
+def _base_url(state: ServiceState | None, request: Request) -> str:
+    if state is not None:
+        return state.base_url(request)
+    return str(request.base_url).rstrip("/")
+
+
+def _render_all(state: ServiceState | None, base_url: str) -> str:
+    from .ingest.feeds import FeedChannel, build_podcast_rss, collect_episodes
+
+    entries = state.context.entries if state is not None else None
+    episodes = collect_episodes(entries, base_url=base_url)
+    return build_podcast_rss(
+        FeedChannel(
+            title="vocast",
+            link=base_url,
+            description="Self-hosted articles-as-podcasts",
+            image_url=f"{base_url}/cover.jpg" if _SHOW_COVER else None,
+        ),
+        episodes,
+    )
+
+
 def _build_rss(entries: list[LibraryEntry], base_url: str) -> str:
-    items: list[str] = []
-    for e in entries:
-        try:
-            pub = datetime.fromisoformat(e.synthesized_at)
-        except ValueError:
-            pub = datetime.now()
-        size = e.audio_path().stat().st_size if e.audio_path().exists() else 0
-        url = f"{base_url}/audio/{e.id}.mp3"
-        items.append(
-            f"""    <item>
-      <title>{escape(e.title)}</title>
-      <description>{escape(e.title)}</description>
-      <guid isPermaLink="false">{escape(e.id)}</guid>
-      <pubDate>{format_datetime(pub)}</pubDate>
-      <enclosure url="{escape(url)}" length="{size}" type="audio/mpeg" />
-      <itunes:duration>{int(e.duration_seconds)}</itunes:duration>
-    </item>"""
-        )
-    items_xml = "\n".join(items)
-    # Show-level art: the bundled vocast cover, served from /cover.jpg. (Per
-    # episode art is embedded in each mp3, which podcast apps read separately.)
-    channel_image_xml = ""
-    if _SHOW_COVER:
-        href = escape(f"{base_url}/cover.jpg")
-        channel_image_xml = (
-            f'\n    <itunes:image href="{href}" />'
-            f"\n    <image><url>{href}</url><title>vocast</title>"
-            f"<link>{escape(base_url)}</link></image>"
-        )
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
-  <channel>
-    <title>vocast</title>
-    <link>{escape(base_url)}</link>
-    <description>Self-hosted articles-as-podcasts</description>
-    <language>en-us</language>{channel_image_xml}
-{items_xml}
-  </channel>
-</rss>
-"""
+    """Render a feed from library entries alone, without ingestion provenance."""
+    from .ingest.feeds import (
+        FeedChannel,
+        build_podcast_rss,
+        library_entries_to_episodes,
+    )
+
+    return build_podcast_rss(
+        FeedChannel(
+            title="vocast",
+            link=base_url,
+            description="Self-hosted articles-as-podcasts",
+            image_url=f"{base_url}/cover.jpg" if _SHOW_COVER else None,
+        ),
+        library_entries_to_episodes(entries, base_url=base_url),
+    )
 
 
 def serve(host: str = "127.0.0.1", port: int = 8080) -> None:
     import uvicorn
 
-    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    uvicorn.run(create_app(_optional_state()), host=host, port=port, log_level="info")
+
+
+def _optional_state() -> ServiceState | None:
+    """Attach ingestion routes if the database can be opened.
+
+    `vocast serve` predates ingestion, so it must keep working even when the
+    database or config is unusable; in that case the library-only feed is
+    served rather than failing to start.
+    """
+    try:
+        from .ingest.api import ServiceState
+        from .ingest.context import AppContext
+
+        return ServiceState(context=AppContext.create())
+    except Exception:  # noqa: BLE001 - never let ingestion break `vocast serve`
+        import logging
+
+        logging.getLogger("vocast.server").warning(
+            "ingestion routes unavailable; serving the library-only feed",
+            exc_info=True,
+        )
+        return None
