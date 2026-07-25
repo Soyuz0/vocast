@@ -445,3 +445,38 @@ def test_unlimited_cgroup_falls_back_to_affinity(
 
     monkeypatch.setattr("builtins.open", fake_open)
     assert tuning.available_cpus() >= 1
+
+
+# --- engine selection ------------------------------------------------------
+
+
+def test_unknown_engine_names_the_available_ones():
+    from vocast.engines import get_engine
+
+    with pytest.raises(ValueError, match="kokoro-onnx"):
+        get_engine("festival")
+
+
+def test_onnx_engine_reports_chunking_matched_to_the_pytorch_one():
+    """Chunk size sets cancellation granularity, so it must not grow."""
+    from vocast.engines.kokoro_engine import KokoroEngine
+    from vocast.engines.kokoro_onnx_engine import KokoroOnnxEngine
+
+    assert KokoroOnnxEngine.MAX_CHARS == KokoroEngine.MAX_CHARS
+    assert KokoroOnnxEngine.SAMPLE_RATE == KokoroEngine.SAMPLE_RATE
+    assert KokoroOnnxEngine.DEFAULT_VOICE == KokoroEngine.DEFAULT_VOICE
+
+
+def test_onnx_model_dir_honours_the_environment(monkeypatch: pytest.MonkeyPatch):
+    from vocast.engines.kokoro_onnx_engine import default_model_dir
+
+    monkeypatch.setenv("VOCAST_TTS_MODEL_DIR", "/data/cache/onnx")
+    assert default_model_dir() == Path("/data/cache/onnx")
+
+
+def test_onnx_engine_reuses_existing_model_files(tmp_path: Path):
+    """A present file must never trigger a 325 MB download."""
+    from vocast.engines.kokoro_onnx_engine import MODEL_FILE, _ensure_file
+
+    (tmp_path / MODEL_FILE).write_bytes(b"pretend-model")
+    assert _ensure_file(tmp_path, MODEL_FILE) == tmp_path / MODEL_FILE

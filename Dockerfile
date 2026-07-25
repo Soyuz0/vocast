@@ -32,6 +32,11 @@ RUN pip install --no-cache-dir \
 
 RUN pip install --no-cache-dir .
 
+# ONNX Runtime is the faster CPU path for Kokoro (measured 1.39x on Coffee Lake,
+# with model load dropping from ~7s to ~1.5s). Both engines ship so `tts.engine`
+# can switch between them without rebuilding.
+RUN pip install --no-cache-dir kokoro-onnx onnxruntime
+
 # Kokoro's English G2P lazily pip-installs this spaCy model on first use.
 # That fails in the runtime image, which runs as an unprivileged user with no
 # write access to site-packages, so install it now and keep first run offline.
@@ -56,7 +61,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     VOCAST_STORAGE_LIBRARY_PATH=/data/library \
     VOCAST_SERVER_HOST=0.0.0.0 \
     VOCAST_SERVER_PORT=8000 \
-    HF_HOME=/data/cache/huggingface
+    HF_HOME=/data/cache/huggingface \
+    VOCAST_TTS_MODEL_DIR=/data/cache/onnx
 
 # VOCAST_CONFIG is deliberately not set: /data/config.yaml is already one of the
 # default lookup paths, so it is used when present and simply absent otherwise.
@@ -66,7 +72,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
 # model cache is deliberately placed there so weights survive a restart
 # instead of being re-downloaded on every container start.
 RUN useradd --create-home --uid 10001 vocast \
-    && mkdir -p /data/library /data/cache \
+    && mkdir -p /data/library /data/cache /data/cache/onnx \
     && chown -R vocast:vocast /data
 
 USER vocast

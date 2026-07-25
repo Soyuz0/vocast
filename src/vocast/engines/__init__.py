@@ -6,7 +6,11 @@ def get_engine(name: str) -> TTSEngine:
         from .kokoro_engine import KokoroEngine
 
         return KokoroEngine()
-    raise ValueError(f"unknown engine: {name!r}")
+    if name in ("kokoro-onnx", "kokoro_onnx"):
+        from .kokoro_onnx_engine import KokoroOnnxEngine
+
+        return KokoroOnnxEngine()
+    raise ValueError(f"unknown engine: {name!r} (available: kokoro, kokoro-onnx)")
 
 
 __all__ = ["AudioChunk", "TTSEngine", "get_engine"]
