@@ -11,10 +11,10 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 from .. import library
-from ..engines import TTSEngine, get_engine
+from ..engines import AudioChunk, TTSEngine, get_engine
 from ..fetch import fetch_article
 from ..pipeline import SynthesisCancelled, synthesize_article
 from .logs import get_logger, kv
@@ -62,6 +62,19 @@ def _is_same_heading(line: str, title: str) -> bool:
     return bool(normalized) and normalized == _normalize_heading(title)
 
 
+class _EpisodeWrite(TypedDict):
+    """Arguments shared by creating and replacing a library entry."""
+
+    title: str
+    chunk: AudioChunk
+    voice: str
+    engine: str
+    source: str | None
+    cover_url: str | None
+    mp3_bitrate: str
+    article_text: str | None
+
+
 @dataclass(frozen=True)
 class GeneratedEpisode:
     episode_id: str
@@ -99,6 +112,7 @@ class EpisodeGenerator(Protocol):
         title: str | None = None,
         byline: str | None = None,
         cover_url: str | None = None,
+        replace_episode_id: str | None = None,
     ) -> GeneratedEpisode: ...
 
 
@@ -135,6 +149,7 @@ class VocastEpisodeGenerator:
         title: str | None = None,
         byline: str | None = None,
         cover_url: str | None = None,
+        replace_episode_id: str | None = None,
     ) -> GeneratedEpisode:
         extracted_title, text, article_cover = self._extract(url)
         # A supplied cover is the publication's own artwork, which keeps every
@@ -166,16 +181,32 @@ class VocastEpisodeGenerator:
                 f"synthesis failed for {url}: {type(exc).__name__}: {exc}"
             ) from exc
 
-        entry = library.add_entry(
-            title=spoken_title,
-            chunk=chunk,
-            voice=voice,
-            engine=self._engine_name,
-            source=url,
-            cover_url=artwork,
-            mp3_bitrate=self._mp3_bitrate,
-            article_text=narration,
-        )
+        # A TypedDict rather than a plain dict: the same arguments go to two
+        # functions, and an untyped mapping would silently stop them being
+        # checked against either signature.
+        shared: _EpisodeWrite = {
+            "title": spoken_title,
+            "chunk": chunk,
+            "voice": voice,
+            "engine": self._engine_name,
+            "source": url,
+            "cover_url": artwork,
+            "mp3_bitrate": self._mp3_bitrate,
+            "article_text": narration,
+        }
+        # Re-narrating in place keeps the podcast GUID, so subscribers do not
+        # see the old episode withdrawn and a new one appear.
+        if replace_episode_id:
+            try:
+                entry = library.replace_entry(replace_episode_id, **shared)
+            except (FileNotFoundError, ValueError) as exc:
+                log.warning(
+                    "cannot replace episode in place, creating a new one %s",
+                    kv(episode_id=replace_episode_id, error=exc),
+                )
+                entry = library.add_entry(**shared)
+        else:
+            entry = library.add_entry(**shared)
         log.info(
             "episode generated %s",
             kv(

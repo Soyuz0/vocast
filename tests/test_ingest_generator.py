@@ -469,3 +469,88 @@ def test_article_image_is_used_when_the_publication_has_none(
     assert library.get_entry(episode.episode_id).cover_url == (
         "https://example.com/article-image.jpg"
     )
+
+
+# --- in-place regeneration -------------------------------------------------
+
+
+def test_regeneration_keeps_the_episode_id(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """The id is the podcast GUID; changing it makes clients report the old
+    episode as withdrawn by the publisher."""
+    _stub_extraction(monkeypatch)
+    gen = VocastEpisodeGenerator(engine=engine)
+    first = gen.generate_from_url("https://example.com/a")
+
+    second = gen.generate_from_url(
+        "https://example.com/a", replace_episode_id=first.episode_id
+    )
+
+    assert second.episode_id == first.episode_id
+    assert len(library.list_entries()) == 1
+
+
+def test_regeneration_rewrites_the_audio(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_extraction(monkeypatch)
+    gen = VocastEpisodeGenerator(engine=engine)
+    first = gen.generate_from_url("https://example.com/a", title="Old")
+
+    gen.generate_from_url(
+        "https://example.com/a", title="New", replace_episode_id=first.episode_id
+    )
+
+    stored = library.get_entry(first.episode_id)
+    assert stored.title == "New"
+    assert Path(stored.audio_path()).exists()
+
+
+def test_failed_regeneration_leaves_the_previous_episode_intact(
+    lib: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Otherwise a transient failure would blank a published episode."""
+    _stub_extraction(monkeypatch)
+    good = VocastEpisodeGenerator(engine=FakeEngine())
+    first = good.generate_from_url("https://example.com/a", title="Original")
+    original_bytes = Path(first.audio_path).read_bytes()
+
+    class BrokenEngine(FakeEngine):
+        def synthesize(self, text, voice=None):
+            raise RuntimeError("engine died")
+
+    broken = VocastEpisodeGenerator(engine=BrokenEngine())
+    with pytest.raises(TransientGenerationError):
+        broken.generate_from_url(
+            "https://example.com/a", replace_episode_id=first.episode_id
+        )
+
+    stored = library.get_entry(first.episode_id)
+    assert stored.title == "Original"
+    assert Path(stored.audio_path()).read_bytes() == original_bytes
+
+
+def test_replacing_a_missing_episode_falls_back_to_creating_one(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_extraction(monkeypatch)
+    gen = VocastEpisodeGenerator(engine=engine)
+
+    episode = gen.generate_from_url(
+        "https://example.com/a", replace_episode_id="20200101T000000Z_gone_abc123"
+    )
+
+    assert episode.episode_id != "20200101T000000Z_gone_abc123"
+    assert library.get_entry(episode.episode_id) is not None
+
+
+def test_replacement_refuses_an_unsafe_id(lib: Path, engine: FakeEngine):
+    with pytest.raises(ValueError, match="unsafe entry id"):
+        library.replace_entry(
+            "../../escape",
+            title="T",
+            chunk=AudioChunk(np.zeros(240, dtype=np.float32), 24000),
+            voice="v",
+            engine="e",
+        )

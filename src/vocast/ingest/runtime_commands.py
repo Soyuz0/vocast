@@ -240,7 +240,6 @@ def cmd_regenerate(args: argparse.Namespace) -> int:
     the episode is rebuilt from scratch, which means a new episode id: podcast
     clients treat the result as a new episode and will re-download it.
     """
-    from .. import library
     from .models import EntryStatus
 
     context = build_context(args)
@@ -271,18 +270,9 @@ def cmd_regenerate(args: argparse.Namespace) -> int:
 
     requeued = 0
     for entry in targets:
-        if entry.vocast_episode_id:
-            episode = library.get_entry(entry.vocast_episode_id)
-            if episode is not None:
-                try:
-                    library.delete_entry(episode)
-                except OSError as exc:
-                    print(
-                        f"  ! {entry.id}: could not delete audio: {exc}",
-                        file=sys.stderr,
-                    )
-                    continue
-        context.entries.requeue(entry.id, clear_episode=True)
+        # The episode id is deliberately retained: the worker replaces the audio
+        # under it, so nothing disappears from the feed in the meantime.
+        context.entries.requeue(entry.id)
         requeued += 1
         if not args.quiet:
             print(f"  ~ entry {entry.id}  {entry.title[:56]}")

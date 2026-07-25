@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import shutil
@@ -166,6 +167,59 @@ def add_entry(
     audio_path = entry_dir / "audio.mp3"
     with _resolve_cover(downloaded_cover) as cover_path:
         write_audio(chunk, audio_path, mp3_bitrate=mp3_bitrate, cover_path=cover_path)
+
+    duration = float(len(chunk.samples)) / chunk.sample_rate
+    entry = LibraryEntry(
+        id=entry_id,
+        title=title,
+        source=source,
+        synthesized_at=datetime.now(timezone.utc).isoformat(),
+        duration_seconds=duration,
+        voice=voice,
+        engine=engine,
+        cover_url=cover_url,
+    )
+    (entry_dir / "meta.json").write_text(json.dumps(asdict(entry), indent=2))
+    if article_text:
+        (entry_dir / "article.txt").write_text(article_text, encoding="utf-8")
+    return entry
+
+
+def replace_entry(
+    entry_id: str,
+    *,
+    title: str,
+    chunk: AudioChunk,
+    voice: str,
+    engine: str,
+    source: str | None = None,
+    cover_url: str | None = None,
+    mp3_bitrate: str = "96k",
+    article_text: str | None = None,
+) -> LibraryEntry:
+    """Rewrite an existing entry's audio, keeping its id.
+
+    The id is the podcast GUID, so re-narrating an article in place leaves
+    subscribers' records intact. Minting a new id instead makes clients report
+    the old episode as withdrawn by the publisher.
+
+    New audio is written alongside the old and swapped in only once complete, so
+    a failure part-way leaves the previous episode serving.
+    """
+    if not is_valid_entry_id(entry_id):
+        raise ValueError(f"unsafe entry id: {entry_id!r}")
+    entry_dir = LIBRARY_PATH / entry_id
+    if not entry_dir.is_dir():
+        raise FileNotFoundError(f"no library entry at {entry_dir}")
+
+    staged = entry_dir / f".audio.new-{os.getpid()}.mp3"
+    downloaded_cover = _download_cover(cover_url, entry_dir) if cover_url else None
+    try:
+        with _resolve_cover(downloaded_cover) as cover_path:
+            write_audio(chunk, staged, mp3_bitrate=mp3_bitrate, cover_path=cover_path)
+        os.replace(staged, entry_dir / "audio.mp3")
+    finally:
+        staged.unlink(missing_ok=True)
 
     duration = float(len(chunk.samples)) / chunk.sample_rate
     entry = LibraryEntry(

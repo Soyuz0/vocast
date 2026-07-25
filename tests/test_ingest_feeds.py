@@ -728,3 +728,19 @@ def test_cdata_terminator_in_a_url_cannot_break_the_feed():
     wrapped = _cdata(episode_notes_html(episode))
     assert wrapped.count("<![CDATA[") == wrapped.count("]]>") - wrapped.count("]]]]>")
     ET.fromstring(f"<d>{wrapped}</d>")
+
+
+def test_episode_stays_in_the_feed_while_being_regenerated(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    """Its current audio is still valid until the new version is swapped in."""
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha")
+    _queue_ready(
+        sources, entries, source_name="Tech", episode_id="20260604T120000Z_a_aaa111"
+    )
+    [entry] = entries.all()
+    entries.requeue(entry.id)
+    entries.claim_next()
+
+    guids = [i.find("guid").text for i in _items(_render(entries))]
+    assert guids == ["20260604T120000Z_a_aaa111"]

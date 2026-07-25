@@ -520,8 +520,15 @@ class EntryRepository:
         broken by descending entry id, so the feed never reshuffles between
         requests.
         """
-        clauses = ["e.status = ?", "e.vocast_episode_id IS NOT NULL"]
-        params: list[Any] = [EntryStatus.READY.value]
+        # `processing` is included when an episode already exists: that is a
+        # re-narration in place, and its current audio stays valid until the new
+        # version is swapped in. Excluding it would blank the episode from the
+        # feed for the duration.
+        clauses = [
+            "(e.status = ? OR e.status = ?)",
+            "e.vocast_episode_id IS NOT NULL",
+        ]
+        params: list[Any] = [EntryStatus.READY.value, EntryStatus.PROCESSING.value]
         if source_id is not None:
             clauses.append("e.source_id = ?")
             params.append(source_id)

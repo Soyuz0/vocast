@@ -51,6 +51,7 @@ class StubGenerator:
         self.calls: list[tuple[str, str | None]] = []
         self.bylines: list[str | None] = []
         self.covers: list[str | None] = []
+        self.replaced: list[str | None] = []
 
     def generate_from_url(
         self,
@@ -59,10 +60,12 @@ class StubGenerator:
         title: str | None = None,
         byline: str | None = None,
         cover_url: str | None = None,
+        replace_episode_id: str | None = None,
     ) -> GeneratedEpisode:
         self.calls.append((url, title))
         self.bylines.append(byline)
         self.covers.append(cover_url)
+        self.replaced.append(replace_episode_id)
         result = (
             self.results.pop(0)
             if self.results
@@ -516,3 +519,25 @@ def test_worker_passes_the_publication_artwork_as_the_cover(
     generator = StubGenerator()
     _worker(entries, generator).process_next()
     assert generator.covers == ["http://freshrss/f.php?h=abc"]
+
+
+def test_worker_regenerates_in_place_when_an_episode_exists(
+    entries: EntryRepository, source_id: int
+):
+    entry = _queue(entries, source_id, "a")
+    entries.mark_ready(entry.id, episode_id="ep-original")
+    entries.requeue(entry.id)
+
+    generator = StubGenerator()
+    _worker(entries, generator).process_next()
+
+    assert generator.replaced == ["ep-original"]
+
+
+def test_first_generation_does_not_ask_for_a_replacement(
+    entries: EntryRepository, source_id: int
+):
+    _queue(entries, source_id, "a")
+    generator = StubGenerator()
+    _worker(entries, generator).process_next()
+    assert generator.replaced == [None]
