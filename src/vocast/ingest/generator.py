@@ -1,0 +1,200 @@
+"""The seam between ingestion and vocast's article -> audio pipeline.
+
+Everything downstream of this module deals in `GeneratedEpisode` values and
+knows nothing about trafilatura, chunking, Kokoro, or mp3 encoding. Everything
+upstream reuses the existing pipeline rather than reimplementing it, so the
+manual `vocast add` path and the automated path always produce identical audio.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from typing import Protocol
+
+from .. import library
+from ..engines import TTSEngine, get_engine
+from ..fetch import fetch_article
+from ..pipeline import synthesize_article
+from .logs import get_logger, kv
+from .nethttp import BlockedURLError, FetchError, FetchPolicy, fetch
+
+log = get_logger("generator")
+
+#: Below this many characters the "article" is almost always a paywall notice,
+#: a consent interstitial, or a navigation-only shell. Narrating it produces a
+#: useless episode, so generation fails loudly instead.
+MIN_ARTICLE_CHARS = 400
+
+
+@dataclass(frozen=True)
+class GeneratedEpisode:
+    episode_id: str
+    title: str
+    audio_path: str
+    duration_seconds: float | None
+    content_hash: str | None = None
+
+
+class GenerationError(Exception):
+    """Base class for a failure to turn a URL into an episode."""
+
+
+class TransientGenerationError(GenerationError):
+    """Worth retrying: a timeout, a network blip, a server-side 5xx."""
+
+
+class PermanentGenerationError(GenerationError):
+    """Retrying cannot help: a 404, a blocked URL, or unusable content."""
+
+
+class EpisodeGenerator(Protocol):
+    def generate_from_url(
+        self,
+        url: str,
+        *,
+        title: str | None = None,
+    ) -> GeneratedEpisode: ...
+
+
+class VocastEpisodeGenerator:
+    """Drives the existing vocast pipeline for one article.
+
+    The TTS engine is constructed lazily and then reused, because loading the
+    Kokoro weights costs seconds and would otherwise be paid per episode.
+    """
+
+    def __init__(
+        self,
+        *,
+        engine_name: str = "kokoro",
+        voice: str | None = None,
+        policy: FetchPolicy | None = None,
+        engine: TTSEngine | None = None,
+        min_chars: int = MIN_ARTICLE_CHARS,
+        mp3_bitrate: str = "96k",
+    ) -> None:
+        self._engine_name = engine_name
+        self._voice = voice
+        self._policy = policy or FetchPolicy()
+        self._engine = engine
+        self._min_chars = min_chars
+        self._mp3_bitrate = mp3_bitrate
+
+    def generate_from_url(
+        self, url: str, *, title: str | None = None
+    ) -> GeneratedEpisode:
+        extracted_title, text, cover_url = self._extract(url)
+        engine = self._resolve_engine()
+        voice = self._voice or engine.default_voice
+
+        try:
+            chunk = synthesize_article(text, engine, voice=voice, progress=False)
+        except ValueError as exc:
+            # Raised for empty input, which the length check above should have
+            # already caught; treat it as unusable content rather than retrying.
+            raise PermanentGenerationError(f"synthesis rejected {url}: {exc}") from exc
+        except Exception as exc:
+            raise TransientGenerationError(
+                f"synthesis failed for {url}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        entry = library.add_entry(
+            title=title or extracted_title or "untitled",
+            chunk=chunk,
+            voice=voice,
+            engine=self._engine_name,
+            source=url,
+            cover_url=cover_url,
+            mp3_bitrate=self._mp3_bitrate,
+        )
+        log.info(
+            "episode generated %s",
+            kv(
+                episode_id=entry.id,
+                url=url,
+                title=entry.title,
+                seconds=round(entry.duration_seconds, 1),
+            ),
+        )
+        return GeneratedEpisode(
+            episode_id=entry.id,
+            title=entry.title,
+            audio_path=str(entry.audio_path()),
+            duration_seconds=entry.duration_seconds,
+            content_hash=_hash_text(text),
+        )
+
+    # -- internals ---------------------------------------------------------
+
+    def _extract(self, url: str) -> tuple[str | None, str, str | None]:
+        try:
+            extracted_title, text, cover_url = fetch_article(
+                url, html_fetcher=self._fetch_html
+            )
+        except BlockedURLError as exc:
+            raise PermanentGenerationError(str(exc)) from exc
+        except FetchError as exc:
+            raise _classify_fetch_error(exc) from exc
+        except ValueError as exc:
+            # trafilatura found nothing worth reading.
+            raise PermanentGenerationError(f"could not extract {url}: {exc}") from exc
+
+        cleaned = text.strip()
+        if len(cleaned) < self._min_chars:
+            raise PermanentGenerationError(
+                f"extracted only {len(cleaned)} characters from {url}, below the "
+                f"{self._min_chars} character minimum; the page is probably a "
+                "paywall, consent screen, or navigation stub rather than an article"
+            )
+        return extracted_title, cleaned, cover_url
+
+    def _fetch_html(self, url: str) -> str:
+        return fetch(url, policy=self._policy).text()
+
+    def _resolve_engine(self) -> TTSEngine:
+        if self._engine is None:
+            log.info("loading TTS engine %s", kv(engine=self._engine_name))
+            try:
+                self._engine = get_engine(self._engine_name)
+            except Exception as exc:
+                raise TransientGenerationError(
+                    f"could not load TTS engine {self._engine_name!r}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+        return self._engine
+
+
+# HTTP statuses that are worth another attempt: rate limits, request timeouts,
+# and anything the origin server blames on itself.
+_RETRYABLE_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504, 507, 509})
+
+
+def _classify_fetch_error(exc: FetchError) -> GenerationError:
+    """Decide whether a fetch failure deserves a retry.
+
+    Only a definite client-side rejection (a 4xx we cannot fix by waiting) is
+    permanent. Anything else, including an unrecognized message, is treated as
+    transient so a temporary outage does not permanently discard an article.
+    """
+    message = str(exc)
+    status = _status_from_message(message)
+    if status is None:
+        return TransientGenerationError(message)
+    if status in _RETRYABLE_STATUSES:
+        return TransientGenerationError(message)
+    if 400 <= status < 500:
+        return PermanentGenerationError(message)
+    return TransientGenerationError(message)
+
+
+def _status_from_message(message: str) -> int | None:
+    marker = "HTTP "
+    if not message.startswith(marker):
+        return None
+    candidate = message[len(marker) :].split(" ", 1)[0]
+    return int(candidate) if candidate.isdigit() else None
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()

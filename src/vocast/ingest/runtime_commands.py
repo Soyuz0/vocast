@@ -7,7 +7,10 @@ import sys
 
 from .cli_commands import build_context
 from .config import ConfigError
+from .context import AppContext
+from .generator import VocastEpisodeGenerator
 from .poller import Poller
+from .worker import Worker, WorkerLoop
 
 
 def cmd_poll(args: argparse.Namespace) -> int:
@@ -63,4 +66,50 @@ def cmd_poll(args: argparse.Namespace) -> int:
     # worth a non-zero exit.
     if attempted and len(failed) == len(attempted):
         return 1
+    return 0
+
+
+def build_worker(context: AppContext) -> Worker:
+    """Assemble a worker around the real vocast pipeline."""
+    generator = VocastEpisodeGenerator(
+        engine_name=context.config.tts.engine,
+        voice=context.config.tts.voice,
+        policy=context.fetch_policy(),
+    )
+    return Worker(
+        entries=context.entries, generator=generator, config=context.config.worker
+    )
+
+
+def cmd_worker(args: argparse.Namespace) -> int:
+    context = build_context(args)
+    worker = build_worker(context)
+    worker.reclaim_stale()
+
+    if args.once or args.max_entries is not None:
+        outcomes = worker.drain(max_entries=args.max_entries)
+        if not outcomes:
+            print("queue is empty")
+            return 0
+        for outcome in outcomes:
+            if outcome.ok:
+                print(f"- entry {outcome.entry_id}: {outcome.episode_id}")
+            elif outcome.retrying:
+                print(f"- entry {outcome.entry_id}: will retry ({outcome.error})")
+            else:
+                print(f"! entry {outcome.entry_id}: failed ({outcome.error})")
+        succeeded = sum(1 for o in outcomes if o.ok)
+        print(f"\ngenerated {succeeded} of {len(outcomes)} episode(s)")
+        return 0 if succeeded else 1
+
+    loop = WorkerLoop(worker)
+    print("vocast worker running; press Ctrl-C to stop")
+    loop.start()
+    try:
+        while loop.running:
+            loop.join(timeout=1.0)
+    except KeyboardInterrupt:
+        print("\nstopping after the current episode...")
+    finally:
+        loop.stop()
     return 0

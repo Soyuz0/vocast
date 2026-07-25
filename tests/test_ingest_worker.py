@@ -1,0 +1,300 @@
+"""Worker behavior: success, retry, permanent failure, and crash recovery.
+
+The generator is stubbed throughout: no network, no model download, no speech.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+from pathlib import Path
+
+import pytest
+
+from vocast.ingest.config import WorkerConfig
+from vocast.ingest.db import Database, open_database
+from vocast.ingest.generator import (
+    GeneratedEpisode,
+    PermanentGenerationError,
+    TransientGenerationError,
+)
+from vocast.ingest.models import EntryStatus, FeedEntry
+from vocast.ingest.repository import EntryRepository, SourceRepository
+from vocast.ingest.timeutils import utcnow
+from vocast.ingest.worker import Worker
+
+
+@pytest.fixture
+def db(tmp_path: Path) -> Database:
+    return open_database(tmp_path / "state.db")
+
+
+@pytest.fixture
+def entries(db: Database) -> EntryRepository:
+    return EntryRepository(db)
+
+
+@pytest.fixture
+def source_id(db: Database) -> int:
+    return (
+        SourceRepository(db)
+        .add(name="Example", kind="rss", url="https://example.com/feed.xml")
+        .id
+    )
+
+
+class StubGenerator:
+    """Returns a canned episode, or raises a scripted sequence of errors."""
+
+    def __init__(self, *, results: list[object] | None = None) -> None:
+        self.results = results or []
+        self.calls: list[tuple[str, str | None]] = []
+
+    def generate_from_url(
+        self, url: str, *, title: str | None = None
+    ) -> GeneratedEpisode:
+        self.calls.append((url, title))
+        result = (
+            self.results.pop(0)
+            if self.results
+            else GeneratedEpisode(
+                episode_id=f"ep-{len(self.calls)}",
+                title=title or "untitled",
+                audio_path="/tmp/audio.mp3",
+                duration_seconds=61.5,
+                content_hash="deadbeef",
+            )
+        )
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def _queue(entries: EntryRepository, source_id: int, guid: str = "a"):
+    return entries.insert_if_new(
+        FeedEntry(
+            source_id=source_id,
+            external_guid=guid,
+            title=f"Article {guid}",
+            article_url=f"https://example.com/{guid}",
+            published_at=utcnow(),
+        )
+    )
+
+
+def _worker(entries: EntryRepository, generator, **config) -> Worker:
+    return Worker(entries=entries, generator=generator, config=WorkerConfig(**config))
+
+
+# --- success ---------------------------------------------------------------
+
+
+def test_successful_generation_marks_entry_ready(
+    entries: EntryRepository, source_id: int
+):
+    entry = _queue(entries, source_id)
+    worker = _worker(entries, StubGenerator())
+
+    outcome = worker.process_next()
+
+    assert outcome.ok
+    stored = entries.get(entry.id)
+    assert stored.status is EntryStatus.READY
+    assert stored.vocast_episode_id == "ep-1"
+    assert stored.content_hash == "deadbeef"
+
+
+def test_worker_passes_the_article_url_and_title_to_the_pipeline(
+    entries: EntryRepository, source_id: int
+):
+    _queue(entries, source_id, "post")
+    generator = StubGenerator()
+
+    _worker(entries, generator).process_next()
+
+    assert generator.calls == [("https://example.com/post", "Article post")]
+
+
+def test_process_next_returns_none_on_an_empty_queue(entries: EntryRepository):
+    assert _worker(entries, StubGenerator()).process_next() is None
+
+
+def test_drain_processes_every_queued_entry(entries: EntryRepository, source_id: int):
+    for guid in ("a", "b", "c"):
+        _queue(entries, source_id, guid)
+
+    outcomes = _worker(entries, StubGenerator()).drain()
+
+    assert len(outcomes) == 3
+    assert all(o.ok for o in outcomes)
+
+
+def test_drain_respects_max_entries(entries: EntryRepository, source_id: int):
+    for guid in ("a", "b", "c"):
+        _queue(entries, source_id, guid)
+
+    assert len(_worker(entries, StubGenerator()).drain(max_entries=2)) == 2
+
+
+def test_entry_is_not_generated_twice(entries: EntryRepository, source_id: int):
+    _queue(entries, source_id)
+    generator = StubGenerator()
+    worker = _worker(entries, generator)
+
+    worker.drain()
+    worker.drain()
+
+    assert len(generator.calls) == 1
+
+
+# --- transient failure -----------------------------------------------------
+
+
+def test_transient_failure_schedules_a_retry(entries: EntryRepository, source_id: int):
+    entry = _queue(entries, source_id)
+    generator = StubGenerator(results=[TransientGenerationError("timeout")])
+
+    outcome = _worker(entries, generator).process_next()
+
+    assert outcome.retrying
+    stored = entries.get(entry.id)
+    assert stored.status is EntryStatus.PENDING
+    assert stored.retry_count == 1
+    assert stored.next_retry_at is not None
+
+
+def test_retry_succeeds_on_the_second_attempt(entries: EntryRepository, source_id: int):
+    entry = _queue(entries, source_id)
+    generator = StubGenerator(results=[TransientGenerationError("blip")])
+    worker = _worker(entries, generator, base_retry_minutes=5)
+
+    worker.process_next()
+    # Jump past the backoff window rather than sleeping.
+    outcome = worker.process_next(now=utcnow() + timedelta(minutes=6))
+
+    assert outcome.ok
+    assert entries.get(entry.id).status is EntryStatus.READY
+
+
+def test_backed_off_entry_is_not_retried_immediately(
+    entries: EntryRepository, source_id: int
+):
+    _queue(entries, source_id)
+    generator = StubGenerator(results=[TransientGenerationError("blip")])
+    worker = _worker(entries, generator)
+
+    worker.process_next()
+
+    assert worker.process_next() is None
+    assert len(generator.calls) == 1
+
+
+def test_unknown_error_is_treated_as_transient(
+    entries: EntryRepository, source_id: int
+):
+    entry = _queue(entries, source_id)
+    generator = StubGenerator(results=[RuntimeError("something odd")])
+
+    outcome = _worker(entries, generator).process_next()
+
+    assert outcome.retrying
+    assert entries.get(entry.id).status is EntryStatus.PENDING
+
+
+def test_retries_are_exhausted_into_failed(entries: EntryRepository, source_id: int):
+    entry = _queue(entries, source_id)
+    generator = StubGenerator(
+        results=[TransientGenerationError("down") for _ in range(5)]
+    )
+    worker = _worker(entries, generator, max_retries=5, base_retry_minutes=1)
+
+    moment = utcnow()
+    for _ in range(5):
+        worker.process_next(now=moment)
+        moment += timedelta(hours=12)
+
+    stored = entries.get(entry.id)
+    assert stored.status is EntryStatus.FAILED
+    assert stored.retry_count == 5
+    assert len(generator.calls) == 5
+
+
+# --- backoff policy --------------------------------------------------------
+
+
+def test_backoff_grows_exponentially():
+    worker = _worker(None, None, base_retry_minutes=5, max_retry_minutes=360)
+    delays = [worker.retry_delay(n).total_seconds() / 60 for n in range(1, 5)]
+    assert delays == [5, 10, 20, 40]
+
+
+def test_backoff_is_capped():
+    worker = _worker(None, None, base_retry_minutes=5, max_retry_minutes=360)
+    assert worker.retry_delay(20).total_seconds() / 60 == 360
+
+
+# --- permanent failure -----------------------------------------------------
+
+
+def test_permanent_failure_skips_retries(entries: EntryRepository, source_id: int):
+    entry = _queue(entries, source_id)
+    generator = StubGenerator(results=[PermanentGenerationError("404 gone")])
+
+    outcome = _worker(entries, generator).process_next()
+
+    assert not outcome.ok
+    assert not outcome.retrying
+    stored = entries.get(entry.id)
+    assert stored.status is EntryStatus.FAILED
+    assert "404 gone" in stored.error_message
+
+
+def test_failed_entry_can_be_requeued_and_then_succeeds(
+    entries: EntryRepository, source_id: int
+):
+    entry = _queue(entries, source_id)
+    generator = StubGenerator(results=[PermanentGenerationError("paywall")])
+    worker = _worker(entries, generator)
+    worker.process_next()
+
+    entries.requeue(entry.id)
+    outcome = worker.process_next()
+
+    assert outcome.ok
+    assert entries.get(entry.id).status is EntryStatus.READY
+
+
+# --- crash recovery --------------------------------------------------------
+
+
+def test_stale_processing_entry_is_reclaimed_and_regenerated(
+    entries: EntryRepository, source_id: int
+):
+    entry = _queue(entries, source_id)
+    # Simulate a worker that claimed the entry and then died.
+    entries.claim_next(now=utcnow() - timedelta(hours=3))
+    worker = _worker(entries, StubGenerator(), processing_timeout_minutes=60)
+
+    assert worker.reclaim_stale() == 1
+    assert worker.process_next().ok
+    assert entries.get(entry.id).status is EntryStatus.READY
+
+
+def test_reclaim_leaves_a_live_claim_alone(entries: EntryRepository, source_id: int):
+    _queue(entries, source_id)
+    entries.claim_next()
+    worker = _worker(entries, StubGenerator(), processing_timeout_minutes=60)
+
+    assert worker.reclaim_stale() == 0
+    assert worker.process_next() is None
+
+
+def test_two_workers_never_generate_the_same_entry(
+    entries: EntryRepository, source_id: int
+):
+    _queue(entries, source_id)
+    first, second = StubGenerator(), StubGenerator()
+
+    _worker(entries, first).process_next()
+    _worker(entries, second).process_next()
+
+    assert len(first.calls) + len(second.calls) == 1

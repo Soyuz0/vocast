@@ -7,6 +7,7 @@ import json
 import urllib.error
 import urllib.request
 import zlib
+from collections.abc import Callable
 
 import trafilatura
 
@@ -37,14 +38,22 @@ def _fetch_html(url: str, timeout: float = 30.0) -> str:
         raise ValueError(f"timed out fetching {url}") from None
 
 
-def fetch_article(url: str) -> tuple[str | None, str, str | None]:
+def fetch_article(
+    url: str,
+    *,
+    html_fetcher: Callable[[str], str] | None = None,
+) -> tuple[str | None, str, str | None]:
     """Fetch a URL and return (title, body_text, cover_image_url).
 
     cover_image_url is the article's og:image when the page advertises one,
     else None. Raises ValueError if the URL can't be fetched or has no
     extractable content.
+
+    html_fetcher overrides how the page is retrieved. The default is the plain
+    urllib path used by `vocast add`; the long-running service passes a fetcher
+    that enforces size caps and refuses private addresses.
     """
-    html = _fetch_html(url)
+    html = (html_fetcher or _fetch_html)(url)
 
     result = trafilatura.extract(
         html,

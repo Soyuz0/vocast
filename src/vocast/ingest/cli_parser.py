@@ -135,7 +135,7 @@ def _register_entry(sub: argparse._SubParsersAction) -> None:
 
 
 def _register_runtime(sub: argparse._SubParsersAction) -> None:
-    from .runtime_commands import cmd_poll
+    from .runtime_commands import cmd_poll, cmd_worker
 
     poll = sub.add_parser("poll", help="fetch sources once and queue new articles")
     poll.add_argument(
@@ -148,6 +148,22 @@ def _register_runtime(sub: argparse._SubParsersAction) -> None:
     )
     _add_common(poll)
     poll.set_defaults(func=cmd_poll)
+
+    worker = sub.add_parser("worker", help="turn queued articles into episodes")
+    worker.add_argument(
+        "--once",
+        action="store_true",
+        help="process the queue until it is empty, then exit",
+    )
+    worker.add_argument(
+        "--max-entries",
+        type=int,
+        default=None,
+        metavar="N",
+        help="stop after generating this many episodes (implies --once)",
+    )
+    _add_common(worker)
+    worker.set_defaults(func=cmd_worker)
 
 
 def _register_config(sub: argparse._SubParsersAction) -> None:
