@@ -138,20 +138,25 @@ def _synthesized_at(entry: LibraryEntry) -> datetime:
 
 def episode_description(episode: FeedEpisode) -> str:
     """Human-readable notes: provenance, original date, and a link back."""
-    lines: list[str] = []
+    paragraphs: list[str] = []
+
+    provenance: list[str] = []
     if episode.source_name:
-        lines.append(f"From {episode.source_name}.")
+        provenance.append(f"From {episode.source_name}.")
     if episode.original_published_at is not None:
-        lines.append(
+        provenance.append(
             f"Originally published {episode.original_published_at.date().isoformat()}."
         )
+    if provenance:
+        paragraphs.append(" ".join(provenance))
+
     if episode.summary:
-        lines.append("")
-        lines.append(episode.summary)
+        paragraphs.append(episode.summary)
     if episode.article_url:
-        lines.append("")
-        lines.append(f"Read the original: {episode.article_url}")
-    return "\n".join(lines) if lines else episode.title
+        paragraphs.append(f"Read the original: {episode.article_url}")
+
+    # Blank lines only ever separate paragraphs, never lead or trail.
+    return "\n\n".join(paragraphs) if paragraphs else episode.title
 
 
 def build_podcast_rss(channel: FeedChannel, episodes: list[FeedEpisode]) -> str:

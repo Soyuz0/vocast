@@ -404,3 +404,29 @@ def test_feed_works_without_a_database(lib: Path):
     """`vocast serve` renders the library alone, with no ingestion state."""
     _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha")
     assert len(_items(_render(None))) == 1
+
+
+def test_description_has_no_leading_or_trailing_blank_lines(
+    lib: Path, sources: SourceRepository, entries: EntryRepository
+):
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Alpha", source="https://ex.com/a")
+    manual = _items(_render(entries))[0].find("description").text
+    assert manual == manual.strip()
+
+    _queue_ready(
+        sources,
+        entries,
+        source_name="Tech",
+        episode_id="20260604T120000Z_a_aaa111",
+        article_url="https://example.com/a",
+    )
+    ingested = _items(_render(entries))[0].find("description").text
+    assert ingested == ingested.strip()
+    assert "\n\n\n" not in ingested
+
+
+def test_description_falls_back_to_the_title_with_no_metadata(
+    lib: Path, entries: EntryRepository
+):
+    _make_episode(lib, "20260604T120000Z_a_aaa111", "Just A Title", source=None)
+    assert _items(_render(entries))[0].find("description").text == "Just A Title"
