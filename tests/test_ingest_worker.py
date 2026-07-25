@@ -298,3 +298,74 @@ def test_two_workers_never_generate_the_same_entry(
     _worker(entries, second).process_next()
 
     assert len(first.calls) + len(second.calls) == 1
+
+
+# --- claim ordering --------------------------------------------------------
+
+
+def test_newest_published_article_is_claimed_first(
+    entries: EntryRepository, source_id: int
+):
+    """Working a large backlog should narrate today's news before old posts."""
+    old = entries.insert_if_new(
+        FeedEntry(
+            source_id=source_id,
+            external_guid="old",
+            title="Two Years Ago",
+            article_url="https://example.com/old",
+            published_at=utcnow() - timedelta(days=730),
+        )
+    )
+    new = entries.insert_if_new(
+        FeedEntry(
+            source_id=source_id,
+            external_guid="new",
+            title="Today",
+            article_url="https://example.com/new",
+            published_at=utcnow(),
+        )
+    )
+    assert old.id < new.id  # discovered first, so FIFO would pick it
+
+    worker = _worker(entries, StubGenerator(), newest_first=True)
+    assert worker.process_next().entry_id == new.id
+    assert worker.process_next().entry_id == old.id
+
+
+def test_discovery_order_is_the_default(entries: EntryRepository, source_id: int):
+    old = entries.insert_if_new(
+        FeedEntry(
+            source_id=source_id,
+            external_guid="old",
+            title="Old",
+            article_url="https://example.com/old",
+            published_at=utcnow() - timedelta(days=730),
+        )
+    )
+    entries.insert_if_new(
+        FeedEntry(
+            source_id=source_id,
+            external_guid="new",
+            title="New",
+            article_url="https://example.com/new",
+            published_at=utcnow(),
+        )
+    )
+
+    assert _worker(entries, StubGenerator()).process_next().entry_id == old.id
+
+
+def test_newest_first_falls_back_to_discovery_time_without_a_date(
+    entries: EntryRepository, source_id: int
+):
+    undated = entries.insert_if_new(
+        FeedEntry(
+            source_id=source_id,
+            external_guid="undated",
+            title="No Date",
+            article_url="https://example.com/undated",
+            published_at=None,
+        )
+    )
+    worker = _worker(entries, StubGenerator(), newest_first=True)
+    assert worker.process_next().entry_id == undated.id

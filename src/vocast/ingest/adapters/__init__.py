@@ -9,11 +9,13 @@ from __future__ import annotations
 from ..models import FeedEntry, Source, SourceKind
 from .base import FeedParseError, SourceAdapter
 from .freshrss import FreshRSSAdapter
+from .freshrss_api import FreshRSSAPIAdapter
 from .rss import GenericRSSAdapter
 
 _ADAPTERS: dict[str, type] = {
     SourceKind.RSS.value: GenericRSSAdapter,
     SourceKind.FRESHRSS_FEED.value: FreshRSSAdapter,
+    SourceKind.FRESHRSS_API.value: FreshRSSAPIAdapter,
 }
 
 
@@ -40,6 +42,7 @@ def build_adapter(source: Source, **kwargs) -> SourceAdapter:
 __all__ = [
     "FeedEntry",
     "FeedParseError",
+    "FreshRSSAPIAdapter",
     "FreshRSSAdapter",
     "GenericRSSAdapter",
     "SourceAdapter",

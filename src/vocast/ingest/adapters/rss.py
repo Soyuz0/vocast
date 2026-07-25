@@ -43,10 +43,14 @@ class GenericRSSAdapter:
         *,
         policy: FetchPolicy | None = None,
         fetcher: Fetcher = fetch,
+        known_guids: Callable[..., Any] | None = None,
     ) -> None:
         self._source = source
         self._fetcher = fetcher
         self._policy = _policy_for(source, policy)
+        # Accepted for a uniform adapter signature but unused: a feed document
+        # is a single response, so there is no deeper pagination to skip.
+        self._known_guids = known_guids
 
     @property
     def source(self) -> Source:

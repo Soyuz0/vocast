@@ -84,10 +84,14 @@ def test_factory_builds_the_freshrss_adapter():
 
 
 def test_unknown_kind_names_the_supported_ones():
-    """A typo, or the not-yet-built API kind, must be reported not ignored."""
-    bad = replace(_source(), kind="freshrss_api")
+    """A typo must be reported, and the error must list the real options."""
+    bad = replace(_source(), kind="freshrss_carrier_pigeon")
     with pytest.raises(ValueError, match="freshrss_feed"):
         build_adapter(bad)
+
+
+def test_freshrss_api_is_a_supported_kind():
+    assert "freshrss_api" in supported_kinds()
 
 
 # --- parsing ---------------------------------------------------------------

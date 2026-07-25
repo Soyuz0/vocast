@@ -16,6 +16,7 @@ from .logs import get_logger, kv
 from .loops import IntervalLoop
 from .poller import Poller
 from .retention import Retention
+from .storage import verify_storage
 from .worker import Worker, WorkerLoop
 
 log = get_logger("service")
@@ -163,6 +164,10 @@ def run_service(
     with_worker: bool = True,
 ) -> int:
     import uvicorn
+
+    # Before anything else: if we cannot store episodes there is no point
+    # discovering or synthesizing them.
+    verify_storage(config.storage)
 
     context = AppContext.create(config)
     context.sync_configured_sources()

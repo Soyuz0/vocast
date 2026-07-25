@@ -20,3 +20,7 @@ assets/palette.png
 
 # Phone clip — uploaded to GitHub as an attachment, not committed
 assets/downcast-demo.mp4
+
+# Live deployment state: database, generated audio, host config
+data/
+docker-compose.override.yml

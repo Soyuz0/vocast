@@ -73,7 +73,9 @@ class Worker:
 
     def process_next(self, *, now: datetime | None = None) -> WorkOutcome | None:
         """Claim and process one entry. Returns None when nothing is due."""
-        entry = self._entries.claim_next(now=now)
+        entry = self._entries.claim_next(
+            now=now, newest_first=self._config.newest_first
+        )
         if entry is None:
             return None
         return self._process(entry)

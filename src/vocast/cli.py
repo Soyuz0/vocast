@@ -415,12 +415,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from .ingest.config import ConfigError
+    from .ingest.storage import StorageUnavailableError
 
     try:
         _apply_storage_config(getattr(args, "config", None))
         return args.func(args)
-    except ConfigError as exc:
-        # A misconfigured file is a user error, not a crash; report it plainly.
+    except (ConfigError, StorageUnavailableError) as exc:
+        # Misconfiguration and an unavailable library are user errors, not
+        # crashes; report them plainly instead of dumping a traceback.
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

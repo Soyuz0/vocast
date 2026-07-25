@@ -282,3 +282,39 @@ def _headers(**fields: str) -> Message:
     for key, value in fields.items():
         message[key] = value
     return message
+
+
+# --- POST ------------------------------------------------------------------
+
+
+def test_data_makes_it_a_post_and_is_sent(monkeypatch: pytest.MonkeyPatch):
+    calls = _install_opener(monkeypatch, lambda url, req: _FakeHTTPResponse(b"ok"))
+    fetch("https://example.com/login", data=b"Email=a&Passwd=b")
+
+    assert calls[0].data == b"Email=a&Passwd=b"
+    assert calls[0].get_method() == "POST"
+
+
+def test_redirect_on_a_post_is_refused(monkeypatch: pytest.MonkeyPatch):
+    """Following it would re-send credentials to another location."""
+
+    def handler(url, request):
+        raise urllib.error.HTTPError(
+            url, 302, "Found", _headers(Location="https://evil.example/"), None
+        )
+
+    _install_opener(monkeypatch, handler)
+    with pytest.raises(FetchError, match="refusing to follow a redirect on a POST"):
+        fetch("https://example.com/login", data=b"Passwd=secret")
+
+
+def test_post_credentials_are_not_echoed_in_the_error(monkeypatch: pytest.MonkeyPatch):
+    def handler(url, request):
+        raise urllib.error.HTTPError(
+            url, 302, "Found", _headers(Location="/elsewhere"), None
+        )
+
+    _install_opener(monkeypatch, handler)
+    with pytest.raises(FetchError) as excinfo:
+        fetch("https://example.com/login", data=b"Passwd=hunter2")
+    assert "hunter2" not in str(excinfo.value)

@@ -152,8 +152,14 @@ def fetch(
     policy: FetchPolicy | None = None,
     headers: dict[str, str] | None = None,
     accept: str | None = None,
+    data: bytes | None = None,
 ) -> Response:
-    """Fetch a URL, following redirects manually with per-hop validation."""
+    """Fetch a URL, following redirects manually with per-hop validation.
+
+    Passing `data` makes it a POST, which the FreshRSS API needs for its login
+    exchange. The body is not re-sent across redirects: a 30x on a POST is
+    either a protocol error or a downgrade attempt, so it is refused.
+    """
     rules = policy or FetchPolicy()
     request_headers = {"User-Agent": rules.user_agent}
     if accept:
@@ -165,13 +171,19 @@ def fetch(
     current = validate_url(url, allow_private=rules.allow_private)
 
     for _ in range(MAX_REDIRECTS + 1):
-        request = urllib.request.Request(current, headers=request_headers)
+        request = urllib.request.Request(current, headers=request_headers, data=data)
         try:
             with opener.open(request, timeout=rules.timeout) as response:
                 return _read_response(current, response, rules)
         except urllib.error.HTTPError as exc:
             location = exc.headers.get("Location") if exc.headers else None
             if exc.code in (301, 302, 303, 307, 308) and location:
+                if data is not None:
+                    raise FetchError(
+                        f"refusing to follow a redirect on a POST to {current} "
+                        f"(HTTP {exc.code}); credentials would be re-sent to "
+                        "another location"
+                    ) from exc
                 current = validate_url(
                     urllib.parse.urljoin(current, location),
                     allow_private=rules.allow_private,

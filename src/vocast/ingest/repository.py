@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -333,22 +334,31 @@ class EntryRepository:
             ).fetchall()
         return [Entry.from_row(r) for r in rows]
 
-    def claim_next(self, *, now: datetime | None = None) -> Entry | None:
+    def claim_next(
+        self, *, now: datetime | None = None, newest_first: bool = False
+    ) -> Entry | None:
         """Atomically move one due pending entry to `processing` and return it.
 
         Selection and update happen inside one `BEGIN IMMEDIATE` transaction,
-        so two workers can never claim the same entry. Entries are claimed in
-        discovery order, which keeps the queue fair and predictable.
+        so two workers can never claim the same entry.
+
+        By default entries are claimed in discovery order, which is fair and
+        predictable. `newest_first` instead takes the most recently *published*
+        article, which is what you want when working through a large backlog:
+        today's news gets narrated before a two-year-old post.
         """
         moment = now or utcnow()
         moment_iso = to_iso(moment)
+        order = (
+            "COALESCE(published_at, created_at) DESC, id DESC" if newest_first else "id"
+        )
         with self._db.transaction() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT id FROM entries
                 WHERE status = ?
                   AND (next_retry_at IS NULL OR next_retry_at <= ?)
-                ORDER BY id
+                ORDER BY {order}
                 LIMIT 1
                 """,
                 (EntryStatus.PENDING.value, moment_iso),
@@ -526,6 +536,30 @@ class EntryRepository:
             )
             for r in rows
         ]
+
+    def known_guids(self, source_id: int, guids: Iterable[str]) -> set[str]:
+        """Of these external guids, which does this source already track?
+
+        Lets an adapter that pages through a large backlog stop as soon as it
+        reaches articles already recorded, instead of re-downloading everything
+        on every poll.
+        """
+        wanted = list(guids)
+        if not wanted:
+            return set()
+        found: set[str] = set()
+        with self._db.reading() as conn:
+            # Chunked to stay well under SQLite's variable limit.
+            for start in range(0, len(wanted), 500):
+                batch = wanted[start : start + 500]
+                placeholders = ",".join("?" * len(batch))
+                rows = conn.execute(
+                    f"SELECT external_guid FROM entries WHERE source_id = ? "
+                    f"AND external_guid IN ({placeholders})",
+                    (source_id, *batch),
+                ).fetchall()
+                found.update(r["external_guid"] for r in rows)
+        return found
 
     def find_by_episode_id(self, episode_id: str) -> Entry | None:
         with self._db.reading() as conn:

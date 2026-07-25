@@ -38,6 +38,7 @@ class EntryStatus(str, Enum):
 class SourceKind(str, Enum):
     RSS = "rss"
     FRESHRSS_FEED = "freshrss_feed"
+    FRESHRSS_API = "freshrss_api"
 
 
 @dataclass(frozen=True)

@@ -7,6 +7,7 @@ episode generation, and vice versa.
 
 from __future__ import annotations
 
+import functools
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -110,7 +111,11 @@ class Poller:
 
     def _poll_locked(self, source: Source, result: SourcePollResult) -> None:
         try:
-            adapter = self._adapter_factory(source, policy=self._policy)
+            adapter = self._adapter_factory(
+                source,
+                policy=self._policy,
+                known_guids=functools.partial(self._entries.known_guids, source.id),
+            )
             discovered = adapter.fetch_entries()
         # Adapters wrap third-party parsers and sockets, so the failure surface
         # is open-ended. The error is recorded and returned, never discarded.

@@ -13,12 +13,14 @@ Environment variable convention
     VOCAST_SERVER_PUBLIC_BASE_URL
     VOCAST_DATABASE_PATH
     VOCAST_STORAGE_LIBRARY_PATH
+    VOCAST_STORAGE_REQUIRE_MARKER
     VOCAST_POLLING_DEFAULT_INTERVAL_MINUTES
     VOCAST_WORKER_CONCURRENCY
     VOCAST_WORKER_PROCESSING_TIMEOUT_MINUTES
     VOCAST_WORKER_MAX_RETRIES
     VOCAST_WORKER_BASE_RETRY_MINUTES
     VOCAST_WORKER_MAX_RETRY_MINUTES
+    VOCAST_WORKER_NEWEST_FIRST
     VOCAST_RETENTION_ENABLED / _MAX_AGE_DAYS / _MAX_EPISODES / _INCLUDE_MANUAL
     VOCAST_TTS_ENGINE / VOCAST_TTS_VOICE
     VOCAST_ADMIN_TOKEN
@@ -69,9 +71,19 @@ class DatabaseConfig:
     path: Path = VOCAST_HOME / "vocast.db"
 
 
+#: Sentinel written into the library directory. Its absence is how the service
+#: tells "the network share is not mounted yet" from "the share is empty".
+STORAGE_MARKER = ".vocast-storage"
+
+
 @dataclass(frozen=True)
 class StorageConfig:
     library_path: Path = VOCAST_HOME / "library"
+    #: Refuse to start unless STORAGE_MARKER exists in library_path. Guards a
+    #: network mount: if it is not ready, the bind mount exposes an empty
+    #: directory and episodes would be written somewhere they are never served
+    #: from. Off by default, since local storage cannot have this problem.
+    require_marker: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,6 +98,9 @@ class WorkerConfig:
     max_retries: int = 5
     base_retry_minutes: int = 5
     max_retry_minutes: int = 360
+    #: Narrate the most recently published article first instead of the
+    #: longest-queued one. Off by default so existing setups keep FIFO order.
+    newest_first: bool = False
 
 
 @dataclass(frozen=True)
@@ -239,7 +254,12 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
         storage=StorageConfig(
             library_path=Path(
                 str(storage.get("library_path", StorageConfig.library_path))
-            ).expanduser()
+            ).expanduser(),
+            require_marker=_as_bool(
+                storage.get("require_marker"),
+                StorageConfig.require_marker,
+                "storage.require_marker",
+            ),
         ),
         polling=PollingConfig(
             default_interval_minutes=_as_int(
@@ -279,6 +299,11 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 WorkerConfig.max_retry_minutes,
                 "worker.max_retry_minutes",
                 minimum=1,
+            ),
+            newest_first=_as_bool(
+                worker.get("newest_first"),
+                WorkerConfig.newest_first,
+                "worker.newest_first",
             ),
         ),
         retention=RetentionConfig(
@@ -358,6 +383,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_SERVER_PUBLIC_BASE_URL", "server", "public_base_url", "base_url"),
     ("VOCAST_DATABASE_PATH", "database", "path", "path"),
     ("VOCAST_STORAGE_LIBRARY_PATH", "storage", "library_path", "path"),
+    ("VOCAST_STORAGE_REQUIRE_MARKER", "storage", "require_marker", "bool"),
     (
         "VOCAST_POLLING_DEFAULT_INTERVAL_MINUTES",
         "polling",
@@ -374,6 +400,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_WORKER_MAX_RETRIES", "worker", "max_retries", "int"),
     ("VOCAST_WORKER_BASE_RETRY_MINUTES", "worker", "base_retry_minutes", "int"),
     ("VOCAST_WORKER_MAX_RETRY_MINUTES", "worker", "max_retry_minutes", "int"),
+    ("VOCAST_WORKER_NEWEST_FIRST", "worker", "newest_first", "bool"),
     ("VOCAST_RETENTION_ENABLED", "retention", "enabled", "bool"),
     ("VOCAST_RETENTION_MAX_AGE_DAYS", "retention", "max_age_days", "opt_int"),
     ("VOCAST_RETENTION_MAX_EPISODES", "retention", "max_episodes", "opt_int"),

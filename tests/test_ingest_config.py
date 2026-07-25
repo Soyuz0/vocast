@@ -304,3 +304,52 @@ def test_configured_library_path_applies_to_legacy_commands(tmp_path: Path):
         assert library.LIBRARY_PATH == custom
     finally:
         library.set_library_path(original)
+
+
+# --- storage guard ---------------------------------------------------------
+
+
+def test_verify_storage_creates_a_missing_library(tmp_path: Path):
+    from vocast.ingest.config import StorageConfig
+    from vocast.ingest.storage import verify_storage
+
+    target = tmp_path / "library"
+    verify_storage(StorageConfig(library_path=target))
+    assert target.is_dir()
+
+
+def test_verify_storage_rejects_an_unwritable_library(tmp_path: Path):
+    import os
+
+    from vocast.ingest.config import StorageConfig
+    from vocast.ingest.storage import StorageUnavailableError, verify_storage
+
+    target = tmp_path / "readonly"
+    target.mkdir()
+    os.chmod(target, 0o500)
+    try:
+        with pytest.raises(StorageUnavailableError, match="not writable"):
+            verify_storage(StorageConfig(library_path=target))
+    finally:
+        os.chmod(target, 0o700)
+
+
+def test_marker_requirement_catches_an_unmounted_share(tmp_path: Path):
+    """An empty mountpoint must not be mistaken for an empty library."""
+    from vocast.ingest.config import StorageConfig
+    from vocast.ingest.storage import StorageUnavailableError, verify_storage
+
+    target = tmp_path / "not-mounted"
+    target.mkdir()
+    with pytest.raises(StorageUnavailableError, match="not mounted yet"):
+        verify_storage(StorageConfig(library_path=target, require_marker=True))
+
+
+def test_marker_requirement_passes_once_the_share_is_mounted(tmp_path: Path):
+    from vocast.ingest.config import STORAGE_MARKER, StorageConfig
+    from vocast.ingest.storage import verify_storage
+
+    target = tmp_path / "mounted"
+    target.mkdir()
+    (target / STORAGE_MARKER).touch()
+    verify_storage(StorageConfig(library_path=target, require_marker=True))

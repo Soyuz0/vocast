@@ -296,10 +296,57 @@ FreshRSS items link to the original publisher, so vocast narrates the real
 article rather than FreshRSS's copy, and FreshRSS's stable per-entry id is used
 for deduplication.
 
-> The Google Reader compatible API (`/api/greader.php`) is **not** implemented.
-> Generated feeds cover the same ground with far less machinery. The extension
-> point is documented in `src/vocast/ingest/adapters/freshrss.py` if you want
-> unread-only filtering later.
+### Working through a large unread backlog
+
+A FreshRSS RSS document is a **capped window** — 20 items by default, and its
+`page` parameter is ignored for RSS output. That is fine for keeping up with new
+articles, but it cannot enumerate a backlog: point vocast at it with 10,000
+unreads and you get the newest 20, while the rest are never discovered.
+
+For that, use `kind: freshrss_api`, which talks to FreshRSS's Google Reader
+compatible API and pages through the whole backlog with `continuation` cursors:
+
+```yaml
+sources:
+  - name: FreshRSS Unreads
+    kind: freshrss_api
+    # The instance base URL, not a feed URL.
+    url: https://freshrss.example.com
+    username: your-freshrss-user
+    # Settings > Profile > API management. NOT your login password.
+    api_password: ${FRESHRSS_API_PASSWORD}
+    unread_only: true
+    page_size: 200
+    max_entries_per_poll: 20000
+```
+
+This needs **API access enabled** in FreshRSS (Settings > Authentication) and an
+API password set. To set one from the host:
+
+```
+docker exec freshrss php /var/www/FreshRSS/cli/update-user.php \
+  --user your-user --api-password 'generated-secret'
+```
+
+The adapter stops paging as soon as it reaches a page of articles it already
+tracks, so only the first poll walks the full backlog; later polls fetch a
+single page. Without that it would re-download everything every 15 minutes.
+
+Pair it with newest-first narration, or the queue will start with your oldest
+unread article:
+
+```yaml
+worker:
+  newest_first: true
+  concurrency: 4
+```
+
+The API stream is ordered by *crawl* time (when FreshRSS fetched an article),
+which is what makes pagination reliable; `newest_first` then narrates in true
+newest-*published* order, which is usually what you actually want.
+
+> Only unread enumeration is implemented. Vocast never marks anything read in
+> FreshRSS, so articles stay unread there until you deal with them yourself.
 
 ## Configuring the public base URL
 
@@ -420,12 +467,14 @@ Environment variables follow `VOCAST_<SECTION>_<KEY>`:
 | `VOCAST_SERVER_PUBLIC_BASE_URL` | derived per request |
 | `VOCAST_DATABASE_PATH` | `~/.vocast/vocast.db` |
 | `VOCAST_STORAGE_LIBRARY_PATH` | `~/.vocast/library` |
+| `VOCAST_STORAGE_REQUIRE_MARKER` | `false` |
 | `VOCAST_POLLING_DEFAULT_INTERVAL_MINUTES` | `15` |
 | `VOCAST_WORKER_CONCURRENCY` | `1` |
 | `VOCAST_WORKER_PROCESSING_TIMEOUT_MINUTES` | `60` |
 | `VOCAST_WORKER_MAX_RETRIES` | `5` |
 | `VOCAST_WORKER_BASE_RETRY_MINUTES` | `5` |
 | `VOCAST_WORKER_MAX_RETRY_MINUTES` | `360` |
+| `VOCAST_WORKER_NEWEST_FIRST` | `false` |
 | `VOCAST_RETENTION_ENABLED` | `false` |
 | `VOCAST_RETENTION_MAX_AGE_DAYS` | `90` |
 | `VOCAST_RETENTION_MAX_EPISODES` | `1000` |
@@ -499,6 +548,31 @@ above about apps that proxy feed fetches through their own servers.
 | Ingestion state | `~/.vocast/vocast.db` | `/data/vocast.db` |
 | Episodes | `~/.vocast/library/<id>/` | `/data/library/<id>/` |
 | Model cache | `~/.cache/huggingface` | `/data/cache/huggingface` |
+
+### Storing episodes on a network share
+
+Audio can live anywhere; only the database needs local disk.
+
+```yaml
+database:
+  path: /data/vocast.db     # keep local: SQLite over CIFS/NFS risks corruption
+storage:
+  library_path: /audio      # a bind mount of the share
+  require_marker: true
+```
+
+`require_marker` guards the case where the share is not mounted yet — at boot,
+or after a network blip. An unmounted bind mount looks like an empty directory,
+so episodes would be written somewhere they are never served from. With it set,
+vocast refuses to start unless `<library_path>/.vocast-storage` exists:
+
+```
+touch /mnt/your-share/.vocast-storage
+```
+
+Under `restart: unless-stopped` that turns a not-yet-ready mount into a retry
+loop that heals itself. Also make sure the container user can write to the
+share — a CIFS mount forces its own uid/gid, so match it (`user: "1000:964"`).
 
 Each episode directory holds `audio.mp3` and `meta.json` — unchanged from
 earlier vocast versions.
