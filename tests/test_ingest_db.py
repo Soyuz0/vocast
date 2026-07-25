@@ -73,7 +73,7 @@ def test_migrate_preserves_existing_data(tmp_path: Path):
     first.close()
 
     reopened = open_database(path)
-    assert [s.id for s in SourceRepository(reopened).list()] == [source.id]
+    assert [s.id for s in SourceRepository(reopened).all()] == [source.id]
 
 
 def test_migrate_refuses_newer_schema(tmp_path: Path):
@@ -126,7 +126,7 @@ def test_removing_source_cascades_to_entries(
     entries.insert_if_new(_feed_entry(source.id, "a"))
 
     assert sources.remove(source.id) is True
-    assert entries.list() == []
+    assert entries.all() == []
 
 
 def test_due_includes_never_checked_sources(sources: SourceRepository):
@@ -194,7 +194,7 @@ def test_insert_if_new_returns_none_for_duplicate_guid(
     source = _add_source(sources)
     entries.insert_if_new(_feed_entry(source.id, "a"))
     assert entries.insert_if_new(_feed_entry(source.id, "a")) is None
-    assert len(entries.list()) == 1
+    assert len(entries.all()) == 1
 
 
 def test_same_guid_from_different_sources_is_not_a_duplicate(

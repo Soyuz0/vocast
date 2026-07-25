@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 
 from .cli_commands import build_context
 from .config import ConfigError
@@ -146,3 +147,36 @@ def cmd_run(args: argparse.Namespace) -> int:
         with_poller=not args.no_poller,
         with_worker=not args.no_worker,
     )
+
+
+def cmd_retention_apply(args: argparse.Namespace) -> int:
+    from .retention import Retention
+
+    context = build_context(args)
+    config = context.config.retention
+    if not config.enabled and not args.force:
+        print("retention is disabled in config; pass --force to run it once anyway")
+        return 0
+
+    retention = Retention(
+        entries=context.entries,
+        config=replace(config, enabled=True),
+        library_path=context.config.storage.library_path,
+        include_manual=args.include_manual or config.include_manual,
+    )
+    report = retention.apply(dry_run=args.dry_run)
+
+    if not report.removed and not report.refused:
+        print("nothing to remove")
+        return 0
+    verb = "would remove" if args.dry_run else "removed"
+    for episode_id in report.removed:
+        print(f"- {verb} {episode_id}")
+    for episode_id, reason in report.refused:
+        print(f"! kept {episode_id}: {reason}", file=sys.stderr)
+    print(f"\n{verb} {report.count} episode(s), {report.freed_bytes // 1024} KiB")
+    print(
+        "note: podcast apps that already downloaded these episodes keep their "
+        "local copies"
+    )
+    return 0

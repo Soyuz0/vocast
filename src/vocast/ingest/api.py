@@ -133,7 +133,7 @@ def _register_health(router: APIRouter, state: ServiceState) -> None:
         try:
             counts = state.context.entries.counts_by_status()
             last_poll = state.context.sources.last_successful_poll()
-            source_count = len(state.context.sources.list())
+            source_count = len(state.context.sources.all())
         except Exception as exc:  # noqa: BLE001 - health must never raise
             database_ok = False
             source_count = 0
@@ -161,7 +161,7 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
 
     @router.get("/api/sources", dependencies=[Depends(require_admin)])
     def list_sources() -> JSONResponse:
-        return JSONResponse([_source_json(s) for s in state.context.sources.list()])
+        return JSONResponse([_source_json(s) for s in state.context.sources.all()])
 
     @router.post("/api/sources", dependencies=[Depends(require_admin)])
     def create_source(payload: SourceIn) -> JSONResponse:
@@ -246,7 +246,7 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
                 parsed_status = EntryStatus(status)
             except ValueError as exc:
                 raise HTTPException(400, f"unknown status {status!r}") from exc
-        entries = state.context.entries.list(
+        entries = state.context.entries.all(
             status=parsed_status, source_id=source_id, limit=min(max(limit, 1), 1000)
         )
         return JSONResponse([_entry_json(e) for e in entries])

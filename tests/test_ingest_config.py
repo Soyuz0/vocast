@@ -259,3 +259,29 @@ def test_source_poll_interval_is_optional(tmp_path: Path):
         tmp_path, "sources:\n  - name: A\n    url: https://example.com/f.xml\n"
     )
     assert load_config(path, env={}).sources[0].poll_interval_minutes is None
+
+
+def test_shipped_example_config_is_valid():
+    """The documented example must stay loadable as the schema evolves."""
+    example = Path(__file__).parent.parent / "config.example.yaml"
+    config = load_config(
+        example,
+        env={
+            "FRESHRSS_TOKEN": "token",
+            "MEMBERS_USER": "user",
+            "MEMBERS_PASSWORD": "password",
+        },
+    )
+
+    assert config.server.public_base_url == "https://podcast.example.com"
+    assert config.retention.enabled is False
+    assert {s.kind for s in config.sources} == {"rss", "freshrss_feed"}
+
+
+def test_example_config_declares_no_literal_secrets():
+    """Credentials in the example must be ${VAR} references, not values."""
+    example = Path(__file__).parent.parent / "config.example.yaml"
+    body = example.read_text()
+    for line in body.splitlines():
+        if any(key in line for key in ("password:", "username:", "admin_token:")):
+            assert "${" in line, f"example config hardcodes a secret: {line.strip()}"

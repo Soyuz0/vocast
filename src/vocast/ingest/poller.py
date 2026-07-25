@@ -82,7 +82,7 @@ class Poller:
 
     def poll_all(self, *, enabled_only: bool = True) -> PollReport:
         report = PollReport()
-        for source in self._sources.list(enabled_only=enabled_only):
+        for source in self._sources.all(enabled_only=enabled_only):
             report.results.append(self.poll_source(source))
         return report
 

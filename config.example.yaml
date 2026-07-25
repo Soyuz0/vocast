@@ -1,0 +1,103 @@
+# Vocast configuration. Copy to /data/config.yaml (or ~/.vocast/config.yaml)
+# and edit. Every value here is optional; the defaults shown are what vocast
+# uses when the key is absent.
+#
+# Any setting can also come from the environment as VOCAST_<SECTION>_<KEY>,
+# which wins over this file. Any string value may reference the environment as
+# ${VAR} or ${VAR:-fallback}, so secrets never need to be committed here.
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  # The absolute URL podcast clients will reach this service on. Set it whenever
+  # you are behind a reverse proxy: enclosure URLs are built from it, and
+  # without it they are derived from the incoming request, which behind a
+  # TLS-terminating proxy yields unreachable http://internal-host URLs.
+  public_base_url: https://podcast.example.com
+
+database:
+  path: /data/vocast.db
+
+storage:
+  library_path: /data/library
+
+polling:
+  # Default for sources that do not set poll_interval_minutes.
+  default_interval_minutes: 15
+
+worker:
+  # Number of articles synthesized in parallel. Each worker loads its own copy
+  # of the TTS model, so raising this multiplies memory use.
+  concurrency: 1
+  # An entry claimed but unfinished for this long is assumed to belong to a
+  # crashed worker and is requeued.
+  processing_timeout_minutes: 60
+  # Total attempts before an article is parked as `failed`.
+  max_retries: 5
+  # Exponential backoff between attempts: 5, 10, 20, 40... capped at the max.
+  base_retry_minutes: 5
+  max_retry_minutes: 360
+
+retention:
+  # Off by default: nothing is ever deleted unless you ask.
+  enabled: false
+  max_age_days: 90
+  max_episodes: 1000
+  # Episodes added by hand with `vocast add` are protected unless this is true,
+  # because they cannot be regenerated from any feed.
+  include_manual: false
+
+tts:
+  engine: kokoro
+  # Any Kokoro voice id, e.g. af_heart (default), af_bella, am_michael.
+  voice: af_heart
+
+# Bearer token required for the write endpoints of /api/*. Feeds and
+# /api/health always stay public, since podcast clients cannot authenticate.
+# Prefer setting VOCAST_ADMIN_TOKEN in the environment over writing it here.
+admin_token: ${VOCAST_ADMIN_TOKEN:-}
+
+log_level: INFO
+
+# Allow feeds and articles on private/loopback addresses. Off by default so a
+# feed cannot be used to probe your LAN or a cloud metadata endpoint. Turn it on
+# only if you host FreshRSS or a feed on the same network, and prefer the
+# per-source `allow_private_urls` below over this global switch.
+allow_private_urls: false
+
+# Sources declared here are reconciled into the database on every start, so this
+# file can be the single source of truth for a deployment. Sources added later
+# with `vocast source add` or the API are kept and never removed by this.
+sources:
+  - name: Example Feed
+    kind: rss
+    url: https://example.com/feed.xml
+    enabled: true
+    poll_interval_minutes: 15
+
+  # A FreshRSS category published as a feed
+  # (FreshRSS: Subscription management > category > RSS feed).
+  # The token in the URL is usually all the authentication needed.
+  - name: FreshRSS Tech
+    kind: freshrss_feed
+    url: https://freshrss.example.com/i/?a=rss&get=c_1&token=${FRESHRSS_TOKEN}
+    enabled: true
+    poll_interval_minutes: 15
+
+  # A feed behind HTTP Basic Auth, with credentials from the environment.
+  - name: Members Only
+    kind: rss
+    url: https://members.example.com/feed.xml
+    username: ${MEMBERS_USER}
+    password: ${MEMBERS_PASSWORD}
+
+  # Any other key becomes adapter configuration.
+  - name: Busy Firehose
+    kind: rss
+    url: https://firehose.example.com/feed.xml
+    poll_interval_minutes: 60
+    # Cap how many articles one poll may queue, so adding a feed with a huge
+    # backlog does not enqueue hundreds of episodes at once.
+    max_entries_per_poll: 10
+    headers:
+      User-Agent: vocast (self-hosted)

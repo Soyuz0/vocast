@@ -82,7 +82,7 @@ def test_first_poll_inserts_entries(
     report = poller.poll_due()
 
     assert report.inserted == 1
-    assert [e.article_url for e in entries.list()] == ["https://example.com/a"]
+    assert [e.article_url for e in entries.all()] == ["https://example.com/a"]
 
 
 def test_second_poll_of_unchanged_feed_inserts_nothing(
@@ -95,7 +95,7 @@ def test_second_poll_of_unchanged_feed_inserts_nothing(
     second = poller.poll_all()
 
     assert second.inserted == 0
-    assert len(entries.list()) == 1
+    assert len(entries.all()) == 1
 
 
 def test_newly_published_article_is_inserted_on_a_later_poll(
@@ -111,7 +111,7 @@ def test_newly_published_article_is_inserted_on_a_later_poll(
     report = poller.poll_all()
 
     assert report.inserted == 1
-    assert {e.external_guid for e in entries.list()} == {"a", "b"}
+    assert {e.external_guid for e in entries.all()} == {"a", "b"}
 
 
 def test_poll_records_success_on_the_source(poller: Poller, sources: SourceRepository):
@@ -157,7 +157,7 @@ def test_poll_all_ignores_disabled_sources(
     sources.set_enabled(source.id, False)
 
     assert poller.poll_all().polled == 0
-    assert entries.list() == []
+    assert entries.all() == []
 
 
 # --- fault isolation -------------------------------------------------------
@@ -177,7 +177,7 @@ def test_one_broken_source_does_not_stop_the_others(
 
     assert report.inserted == 1
     assert [f.source_name for f in report.failures] == ["broken"]
-    assert len(entries.list()) == 1
+    assert len(entries.all()) == 1
 
 
 def test_failure_is_recorded_on_the_source(poller: Poller, sources: SourceRepository):
@@ -215,7 +215,7 @@ def test_poll_does_not_generate_audio(
 
     poller.poll_due()
 
-    [entry] = entries.list()
+    [entry] = entries.all()
     assert entry.status.value == "pending"
     assert entry.vocast_episode_id is None
 

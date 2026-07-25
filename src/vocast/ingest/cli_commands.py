@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timezone
 
 from .adapters import supported_kinds
@@ -84,7 +85,7 @@ def cmd_source_add(args: argparse.Namespace) -> int:
 
 def cmd_source_list(args: argparse.Namespace) -> int:
     context = build_context(args)
-    sources = context.sources.list()
+    sources = context.sources.all()
     if not sources:
         print("(no sources)")
         print("add one with: vocast source add --name NAME --url URL")
@@ -139,7 +140,7 @@ def cmd_source_remove(args: argparse.Namespace) -> int:
         print(f"error: no source with id {args.source_id}", file=sys.stderr)
         return 1
 
-    tracked = len(context.entries.list(source_id=source.id, limit=1_000_000))
+    tracked = len(context.entries.all(source_id=source.id, limit=1_000_000))
     if not args.yes:
         print(f'Removing "{source.name}" also forgets {tracked} tracked article(s).')
         print("Generated audio stays in the library; re-adding the source may")
@@ -174,7 +175,7 @@ def cmd_entry_list(args: argparse.Namespace) -> int:
             )
             return 1
 
-    entries = context.entries.list(
+    entries = context.entries.all(
         status=status, source_id=args.source_id, limit=args.limit
     )
     if not entries:
@@ -251,9 +252,9 @@ def cmd_entry_show(args: argparse.Namespace) -> int:
 
 def _entry_counts_by_source(context: AppContext) -> dict[int, int]:
     counts: dict[int, int] = {}
-    for source in context.sources.list():
+    for source in context.sources.all():
         counts[source.id] = len(
-            context.entries.list(source_id=source.id, limit=1_000_000)
+            context.entries.all(source_id=source.id, limit=1_000_000)
         )
     return counts
 
@@ -273,7 +274,7 @@ def _parse_headers(raw: list[str] | None) -> dict[str, object]:
     return {"headers": headers} if headers else {}
 
 
-def _print_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+def _print_table(headers: tuple[str, ...], rows: Sequence[Sequence[str]]) -> None:
     widths = [
         max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(len(headers))
     ]

@@ -27,6 +27,8 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "trafilatura",
+    "feedparser>=6.0",
+    "PyYAML>=6.0",
 ]
 
 [project.urls]
@@ -40,7 +42,7 @@ vocast = "vocast.cli:main"
 packages = ["src/vocast"]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "httpx"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -28,6 +28,7 @@ def register_parsers(sub: argparse._SubParsersAction) -> None:
     _register_source(sub)
     _register_entry(sub)
     _register_runtime(sub)
+    _register_retention(sub)
     _register_config(sub)
 
 
@@ -176,6 +177,28 @@ def _register_runtime(sub: argparse._SubParsersAction) -> None:
     )
     _add_common(run)
     run.set_defaults(func=cmd_run)
+
+
+def _register_retention(sub: argparse._SubParsersAction) -> None:
+    from .runtime_commands import cmd_retention_apply
+
+    parser = sub.add_parser("retention", help="prune old episodes")
+    actions = parser.add_subparsers(dest="retention_cmd", required=True)
+
+    apply_now = actions.add_parser("apply", help="enforce the retention limits now")
+    apply_now.add_argument(
+        "--dry-run", action="store_true", help="report what would be removed"
+    )
+    apply_now.add_argument(
+        "--force", action="store_true", help="run even when retention is disabled"
+    )
+    apply_now.add_argument(
+        "--include-manual",
+        action="store_true",
+        help="also prune episodes added with `vocast add`",
+    )
+    _add_common(apply_now)
+    apply_now.set_defaults(func=cmd_retention_apply)
 
 
 def _register_config(sub: argparse._SubParsersAction) -> None:

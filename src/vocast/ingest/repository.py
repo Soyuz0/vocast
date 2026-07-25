@@ -155,7 +155,7 @@ class SourceRepository:
             ).fetchone()
         return Source.from_row(row) if row else None
 
-    def list(self, *, enabled_only: bool = False) -> list[Source]:
+    def all(self, *, enabled_only: bool = False) -> list[Source]:
         sql = f"SELECT {_SOURCE_COLUMNS} FROM sources"
         if enabled_only:
             sql += " WHERE enabled = 1"
@@ -167,7 +167,7 @@ class SourceRepository:
     def due(self, *, now: datetime | None = None) -> list[Source]:
         """Enabled sources that have never been checked or are past due."""
         moment = now or utcnow()
-        return [s for s in self.list(enabled_only=True) if _is_due(s, moment)]
+        return [s for s in self.all(enabled_only=True) if _is_due(s, moment)]
 
     def set_enabled(self, source_id: int, enabled: bool) -> bool:
         with self._db.transaction() as conn:
@@ -307,7 +307,7 @@ class EntryRepository:
             ).fetchone()
         return Entry.from_row(row) if row else None
 
-    def list(
+    def all(
         self,
         *,
         status: EntryStatus | None = None,

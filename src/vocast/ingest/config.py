@@ -19,7 +19,7 @@ Environment variable convention
     VOCAST_WORKER_MAX_RETRIES
     VOCAST_WORKER_BASE_RETRY_MINUTES
     VOCAST_WORKER_MAX_RETRY_MINUTES
-    VOCAST_RETENTION_ENABLED / _MAX_AGE_DAYS / _MAX_EPISODES
+    VOCAST_RETENTION_ENABLED / _MAX_AGE_DAYS / _MAX_EPISODES / _INCLUDE_MANUAL
     VOCAST_TTS_ENGINE / VOCAST_TTS_VOICE
     VOCAST_ADMIN_TOKEN
     VOCAST_LOG_LEVEL
@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -92,6 +93,9 @@ class RetentionConfig:
     enabled: bool = False
     max_age_days: int | None = 90
     max_episodes: int | None = 1000
+    #: Whether episodes added by hand with `vocast add` are also swept. Off by
+    #: default: those are deliberate and cannot be regenerated from a feed.
+    include_manual: bool = False
 
 
 @dataclass(frozen=True)
@@ -128,7 +132,9 @@ class Config:
     source_path: Path | None = None
 
 
-def load_config(path: Path | str | None = None, env: dict[str, str] | None = None):
+def load_config(
+    path: Path | str | None = None, env: Mapping[str, str] | None = None
+) -> Config:
     """Build a Config from a YAML file plus environment overrides.
 
     With no explicit path, `VOCAST_CONFIG` is honored, then the first existing
@@ -146,7 +152,7 @@ def load_config(path: Path | str | None = None, env: dict[str, str] | None = Non
     return _apply_env(config, environ)
 
 
-def _resolve_path(path: Path | str | None, env: dict[str, str]) -> Path | None:
+def _resolve_path(path: Path | str | None, env: Mapping[str, str]) -> Path | None:
     if path is not None:
         candidate = Path(path)
         if not candidate.is_file():
@@ -164,7 +170,7 @@ def _resolve_path(path: Path | str | None, env: dict[str, str]) -> Path | None:
     return None
 
 
-def _read_yaml(path: Path, env: dict[str, str]) -> dict[str, Any]:
+def _read_yaml(path: Path, env: Mapping[str, str]) -> dict[str, Any]:
     try:
         import yaml
     except ModuleNotFoundError as exc:  # pragma: no cover - packaging guard
@@ -185,7 +191,7 @@ def _read_yaml(path: Path, env: dict[str, str]) -> dict[str, Any]:
     return expand_env(loaded, env)
 
 
-def expand_env(value: Any, env: dict[str, str] | None = None) -> Any:
+def expand_env(value: Any, env: Mapping[str, str] | None = None) -> Any:
     """Recursively substitute `${VAR}` / `${VAR:-default}` in string values."""
     environ = os.environ if env is None else env
     if isinstance(value, str):
@@ -197,7 +203,7 @@ def expand_env(value: Any, env: dict[str, str] | None = None) -> Any:
     return value
 
 
-def _expand_string(text: str, env: dict[str, str]) -> str:
+def _expand_string(text: str, env: Mapping[str, str]) -> str:
     def substitute(match: re.Match[str]) -> str:
         name, fallback = match.group(1), match.group(2)
         if name in env:
@@ -289,6 +295,11 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 RetentionConfig.max_episodes,
                 "retention.max_episodes",
             ),
+            include_manual=_as_bool(
+                retention.get("include_manual"),
+                RetentionConfig.include_manual,
+                "retention.include_manual",
+            ),
         ),
         tts=TTSConfig(
             engine=str(tts.get("engine", TTSConfig.engine)),
@@ -366,6 +377,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_RETENTION_ENABLED", "retention", "enabled", "bool"),
     ("VOCAST_RETENTION_MAX_AGE_DAYS", "retention", "max_age_days", "opt_int"),
     ("VOCAST_RETENTION_MAX_EPISODES", "retention", "max_episodes", "opt_int"),
+    ("VOCAST_RETENTION_INCLUDE_MANUAL", "retention", "include_manual", "bool"),
     ("VOCAST_TTS_ENGINE", "tts", "engine", "str"),
     ("VOCAST_TTS_VOICE", "tts", "voice", "opt_str"),
     ("VOCAST_ADMIN_TOKEN", "", "admin_token", "opt_str"),
@@ -374,7 +386,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
-def _apply_env(config: Config, env: dict[str, str]) -> Config:
+def _apply_env(config: Config, env: Mapping[str, str]) -> Config:
     for name, section, key, kind in _ENV_OVERRIDES:
         if name not in env:
             continue

@@ -1,0 +1,32 @@
+services:
+  vocast:
+    build: .
+    image: vocast:latest
+    restart: unless-stopped
+    ports:
+      # Bind to loopback only. The admin API has no token by default, so do not
+      # publish this straight onto a LAN or the internet; put a reverse proxy in
+      # front (see the README) or set VOCAST_ADMIN_TOKEN.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Database, generated audio, and the Kokoro model cache all live here.
+      # This is the only thing you need to back up.
+      - ./data:/data
+    environment:
+      # /data/config.yaml is picked up automatically when it exists, so there is
+      # no VOCAST_CONFIG here: setting it would make a missing file fatal.
+      #
+      # Podcast clients need absolute, reachable enclosure URLs; without this
+      # they are derived per-request and will point at an internal hostname.
+      VOCAST_SERVER_PUBLIC_BASE_URL: ${VOCAST_PUBLIC_BASE_URL:-http://127.0.0.1:8000}
+      # Required to use the write endpoints of /api/* from anywhere but here.
+      VOCAST_ADMIN_TOKEN: ${VOCAST_ADMIN_TOKEN:-}
+      VOCAST_LOG_LEVEL: ${VOCAST_LOG_LEVEL:-INFO}
+    # Synthesis is CPU-bound and will happily eat every core; cap it so the
+    # rest of the host stays responsive. Tune or remove to taste.
+    cpus: ${VOCAST_CPUS:-2.0}
+    # PyTorch needs real headroom. Below ~2 GB the worker gets OOM-killed
+    # mid-episode (which is recoverable: the entry returns to pending).
+    mem_limit: ${VOCAST_MEM_LIMIT:-4g}
+    security_opt:
+      - no-new-privileges:true

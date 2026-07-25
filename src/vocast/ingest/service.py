@@ -7,69 +7,38 @@ hooks start and stop them, so Ctrl-C and `docker stop` both shut down cleanly.
 
 from __future__ import annotations
 
-import threading
 from contextlib import asynccontextmanager
 
 from .api import ServiceState
 from .config import Config
 from .context import AppContext
 from .logs import get_logger, kv
+from .loops import IntervalLoop
 from .poller import Poller
+from .retention import Retention
 from .worker import Worker, WorkerLoop
 
 log = get_logger("service")
 
 
-class PollerLoop:
-    """Polls due sources on an interval until asked to stop."""
+#: The scheduler wakes up far more often than any poll interval; `due()` is
+#: what decides which sources are actually fetched, so per-source intervals are
+#: honored to within one tick.
+POLL_TICK_SECONDS = 30.0
 
-    def __init__(
-        self,
-        poller: Poller,
-        *,
-        tick_seconds: float = 30.0,
-        name: str = "vocast-poller",
-    ) -> None:
-        self._poller = poller
-        self._tick_seconds = tick_seconds
-        self._name = name
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+RETENTION_TICK_SECONDS = 3600.0
 
-    @property
-    def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
 
-    def start(self) -> None:
-        if self.running:
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name=self._name, daemon=True)
-        self._thread.start()
+def build_poller_loop(poller: Poller) -> IntervalLoop:
+    def tick() -> None:
+        report = poller.poll_due()
+        if report.inserted:
+            log.info(
+                "poll cycle queued articles %s",
+                kv(inserted=report.inserted, sources=report.polled),
+            )
 
-    def stop(self, timeout: float = 30.0) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=timeout)
-
-    def _run(self) -> None:
-        log.info("poller started %s", kv(tick_seconds=self._tick_seconds))
-        while not self._stop.is_set():
-            try:
-                report = self._poller.poll_due()
-                if report.inserted:
-                    log.info(
-                        "poll cycle queued articles %s",
-                        kv(inserted=report.inserted, sources=report.polled),
-                    )
-            except Exception:
-                # The scheduler must survive anything a source throws, or
-                # discovery silently stops for the life of the process.
-                log.exception("poll cycle failed")
-            # Ticking more often than the poll interval is what lets per-source
-            # intervals be honored; `due()` decides what actually gets fetched.
-            self._stop.wait(self._tick_seconds)
-        log.info("poller stopped")
+    return IntervalLoop(tick, interval_seconds=POLL_TICK_SECONDS, name="vocast-poller")
 
 
 class Service:
@@ -84,7 +53,8 @@ class Service:
     ) -> None:
         self.context = context
         self.state = ServiceState(context=context)
-        self._poller_loop: PollerLoop | None = None
+        self._poller_loop: IntervalLoop | None = None
+        self._retention_loop: IntervalLoop | None = None
         self._worker_loops: list[WorkerLoop] = []
         self._with_poller = with_poller
         self._with_worker = with_worker
@@ -97,9 +67,13 @@ class Service:
                 entries=self.context.entries,
                 policy=self.context.fetch_policy(),
             )
-            self._poller_loop = PollerLoop(poller)
+            self._poller_loop = build_poller_loop(poller)
             self._poller_loop.start()
             self.state.poller_running = True
+
+        if config.retention.enabled:
+            self._retention_loop = self._build_retention_loop()
+            self._retention_loop.start()
 
         if self._with_worker:
             # One generator per worker: each holds its own TTS engine, and
@@ -111,6 +85,23 @@ class Service:
                 loop.start()
                 self._worker_loops.append(loop)
             self.state.worker_running = True
+
+    def _build_retention_loop(self) -> IntervalLoop:
+        retention = Retention(
+            entries=self.context.entries,
+            config=self.context.config.retention,
+            library_path=self.context.config.storage.library_path,
+            include_manual=self.context.config.retention.include_manual,
+        )
+
+        def sweep() -> None:
+            retention.apply()
+
+        return IntervalLoop(
+            sweep,
+            interval_seconds=RETENTION_TICK_SECONDS,
+            name="vocast-retention",
+        )
 
     def _build_worker(self) -> Worker:
         from .generator import VocastEpisodeGenerator
@@ -131,6 +122,9 @@ class Service:
         if self._poller_loop is not None:
             self._poller_loop.stop()
             self.state.poller_running = False
+        if self._retention_loop is not None:
+            self._retention_loop.stop()
+            self._retention_loop = None
         for loop in self._worker_loops:
             loop.stop()
         self._worker_loops.clear()

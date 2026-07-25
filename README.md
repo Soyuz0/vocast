@@ -1,6 +1,7 @@
 # Vocast
 
-Convert articles to audio using local TTS models.
+Convert articles to audio using local TTS models — one at a time by hand, or
+continuously from your RSS feeds.
 
 ![Vocast demo: add an article from a URL, list the library, and serve it as a podcast feed](https://raw.githubusercontent.com/cnrmurphy/vocast/main/assets/demo.gif)
 
@@ -18,6 +19,25 @@ and I didn't want to pay for an app.
 Vocast uses Kokoro for TTS. It can fetch articles from a given URL or local text file. Audio files are saved to `~/.vocast/library`. It provides an HTTP server
 that exposes an RSS feed allowing for podcast apps to discover the converted audio files. You can use Tailscale to allow connections between the server and client devices
 like your mobile phone.
+
+It can also run as a **self-hosted service that watches your feeds** and turns
+every new article into a podcast episode by itself:
+
+```
+FreshRSS or any RSS/Atom feed
+        ↓  poll on an interval
+   deduplicate into a persistent queue
+        ↓  extract and clean the article
+   Kokoro TTS  →  MP3
+        ↓
+ subscribable podcast feed
+```
+
+Both modes share the same library, the same feed, and the same pipeline, so
+`vocast add` and an auto-ingested article produce exactly the same kind of
+episode. If you only want the manual workflow, nothing below changes for you.
+
+Jump to [Running as a service](#running-as-a-service).
 
 ## Requirements
 
@@ -107,3 +127,492 @@ vocast synth article.txt              # writes article.mp3
 vocast synth article.txt -o out.wav   # WAV output
 ```
 
+
+---
+
+# Running as a service
+
+The service polls each configured feed, queues articles it has not seen before,
+narrates them one at a time, and publishes the results as a podcast feed. State
+lives in SQLite, so restarts pick up exactly where they left off and an article
+is never narrated twice.
+
+## Architecture
+
+```
+                    ┌──────────┐
+   feeds  ─────────▶│  poller  │──── inserts new entries ────┐
+                    └──────────┘                             ▼
+                                                    ┌──────────────────┐
+                                                    │ SQLite           │
+                                                    │ sources, entries │
+                                                    └──────────────────┘
+                                                             ▲
+                    ┌──────────┐   claims one pending entry   │
+   article ────────▶│  worker  │──────────────────────────────┘
+     HTML           └──────────┘
+                          │  reuses the existing vocast pipeline:
+                          │  extract → clean → chunk → Kokoro → mp3
+                          ▼
+                 ~/.vocast/library/<id>/{audio.mp3, meta.json}
+                          │
+                    ┌──────────┐
+                    │  server  │  /feed.xml  /feeds/all.xml
+                    └──────────┘  /feeds/source/<id>.xml  /api/*
+```
+
+Design points worth knowing:
+
+- **The poller never synthesizes.** A slow or broken feed delays discovery but
+  cannot stall episode generation, and one dead feed never stops the others.
+- **The database is the queue.** Workers claim an entry inside a transaction, so
+  two of them can never pick up the same article.
+- **The library is the authority on what audio exists.** The database only adds
+  provenance, which is why manual and ingested episodes share one feed.
+- **Episode GUIDs are stable forever.** They are library entry ids, written once
+  when the audio is created, so re-rendering a feed or renaming an episode never
+  makes a podcast app re-download anything.
+
+| Component | Where |
+|---|---|
+| Source adapters (RSS, Atom, FreshRSS) | `src/vocast/ingest/adapters/` |
+| Guarded HTTP fetching | `src/vocast/ingest/nethttp.py` |
+| Schema and migrations | `src/vocast/ingest/db.py` |
+| Poller | `src/vocast/ingest/poller.py` |
+| Worker and retries | `src/vocast/ingest/worker.py` |
+| Pipeline seam | `src/vocast/ingest/generator.py` |
+| Feed rendering | `src/vocast/ingest/feeds.py` |
+| HTTP surface | `src/vocast/ingest/api.py` |
+
+## Quick start (no Docker)
+
+```
+vocast source add --name "Simon Willison" --url https://simonwillison.net/atom/everything/
+vocast run
+```
+
+`vocast run` starts the HTTP server, the poller, and the worker together. The
+first run downloads the Kokoro weights (~300 MB). Then subscribe a podcast app
+to `http://<host>:8080/feeds/all.xml`.
+
+To check things without waiting for the poll interval:
+
+```
+vocast poll                 # fetch every enabled source right now
+vocast worker --once        # drain the queue, then exit
+vocast entry list           # see what was discovered
+```
+
+## Docker Compose
+
+```
+mkdir -p data
+cp config.example.yaml data/config.yaml   # then edit it
+docker compose up -d
+docker compose logs -f
+```
+
+`./data` holds the database, the generated audio, and the model cache — it is
+the only thing you need to back up.
+
+Compose binds to `127.0.0.1:8000` on purpose. Podcast apps need a reachable
+URL, so put a reverse proxy in front (below) rather than exposing the port
+directly, and set `VOCAST_ADMIN_TOKEN` if the admin API will be reachable from
+anywhere but localhost:
+
+```
+VOCAST_PUBLIC_BASE_URL=https://podcast.example.com
+VOCAST_ADMIN_TOKEN=$(openssl rand -hex 32)
+```
+
+Put those in a `.env` file next to `docker-compose.yml`.
+
+Notes on the image:
+
+- It is roughly 1.6 GB, almost entirely PyTorch. That is the cost of running TTS
+  locally. The build installs the CPU-only torch wheel; installing the default
+  wheel instead would add several GB of unused CUDA libraries.
+- It runs as an unprivileged user (uid 10001) and only needs to write `/data`.
+- Health is reported at `/api/health`; the healthcheck allows a 5 minute start
+  period for the first-run model download.
+- `docker stop` is graceful: the poller stops immediately and the worker
+  finishes the episode it is on, so no half-written MP3 is left behind.
+- CPU-only Linux is the target. It works on arm64 (including a Raspberry Pi 5)
+  but synthesis is several times slower; expect a long article to take minutes.
+  No GPU support is wired up.
+
+## Adding a normal RSS or Atom source
+
+```
+vocast source add --name "Example" --url https://example.com/feed.xml
+vocast source add --name "Slow Feed" --url https://example.com/feed.xml --interval 120
+vocast source list
+vocast source disable 2
+vocast source enable 2
+vocast source remove 2
+```
+
+Feeds behind HTTP Basic Auth or needing a particular header:
+
+```
+vocast source add --name "Members" --url https://members.example.com/feed.xml \
+  --username ada --password hunter2
+
+vocast source add --name "Picky" --url https://picky.example.com/feed.xml \
+  --header 'User-Agent: vocast (self-hosted)'
+```
+
+Sources can equally be declared in `config.yaml` (see
+[config.example.yaml](config.example.yaml)); that block is reconciled into the
+database on every start, so it can be the single source of truth for a
+deployment. Sources added later by CLI or API are kept, never removed by it.
+
+## Adding a FreshRSS feed
+
+FreshRSS can publish any category as an ordinary Atom feed, which is all vocast
+needs.
+
+1. In FreshRSS, open **Subscription management**, pick a category, and use its
+   **RSS feed** link. You get a URL like
+   `https://freshrss.example.com/i/?a=rss&get=c_1&token=YOUR_TOKEN`.
+2. Add it with `kind: freshrss_feed`:
+
+```
+vocast source add --name "FreshRSS Tech" --kind freshrss_feed \
+  --url 'https://freshrss.example.com/i/?a=rss&get=c_1&token=YOUR_TOKEN'
+```
+
+The token in the URL is usually all the authentication needed. If your instance
+is behind a protected reverse proxy, add `--username` / `--password` too.
+
+For a FreshRSS on your own LAN, allow the private address explicitly:
+
+```
+vocast source add --name "FreshRSS" --kind freshrss_feed \
+  --url 'http://192.168.1.10/i/?a=rss&get=c_1&token=...' --allow-private
+```
+
+FreshRSS items link to the original publisher, so vocast narrates the real
+article rather than FreshRSS's copy, and FreshRSS's stable per-entry id is used
+for deduplication.
+
+> The Google Reader compatible API (`/api/greader.php`) is **not** implemented.
+> Generated feeds cover the same ground with far less machinery. The extension
+> point is documented in `src/vocast/ingest/adapters/freshrss.py` if you want
+> unread-only filtering later.
+
+## Configuring the public base URL
+
+This is the setting people get wrong most often.
+
+Enclosure URLs in the feed must be absolute and reachable by the podcast app.
+By default they are derived from the incoming request, which breaks behind a
+reverse proxy that terminates TLS: the request arrives as plain HTTP on an
+internal hostname, and the app is handed URLs it cannot fetch.
+
+Set it explicitly:
+
+```yaml
+server:
+  public_base_url: https://podcast.example.com
+```
+
+or `VOCAST_SERVER_PUBLIC_BASE_URL=https://podcast.example.com`. Verify with:
+
+```
+curl -s https://podcast.example.com/feeds/all.xml | grep enclosure
+```
+
+Every URL in that output must be fetchable from outside your network.
+
+## Subscribing from a podcast app
+
+| Feed | Contents |
+|---|---|
+| `/feed.xml` | Everything. Unchanged from earlier vocast versions. |
+| `/feeds/all.xml` | Everything. Identical to `/feed.xml`. |
+| `/feeds/source/<id>.xml` | One source only, as its own show. |
+
+Use `vocast source list` to get source ids.
+
+> [!NOTE]
+> Many podcast apps fetch feeds through **their own servers**, not your phone.
+> Overcast and Pocket Casts work this way and cannot reach a LAN-only or
+> tailnet-only URL — the feed must be publicly reachable over HTTPS. Apps that
+> fetch directly from the device (Apple Podcasts, Downcast) work fine with
+> Tailscale. This is also why `vocast init` exists for the Tailscale setup.
+
+## Running a manual poll
+
+```
+vocast poll                      # every enabled source, ignoring intervals
+vocast poll --source-id 3        # just one
+vocast poll --due-only           # respect intervals, as the scheduler does
+```
+
+Or over HTTP:
+
+```
+curl -X POST -H "Authorization: Bearer $VOCAST_ADMIN_TOKEN" \
+  http://127.0.0.1:8000/api/sources/3/poll
+```
+
+## Retrying failed entries
+
+```
+vocast entry list --status failed -v     # what failed and why
+vocast entry show 42                     # one entry in detail
+vocast entry retry 42                    # put it back in the queue
+```
+
+Transient failures (timeouts, 5xx, rate limits) retry automatically with
+exponential backoff — 5, 10, 20, 40 minutes and so on, capped at 6 hours, for 5
+attempts by default. Permanent failures (404, a blocked URL, a page that
+extracts to almost nothing) are parked immediately as `failed`; retrying those
+only helps once the underlying problem is fixed.
+
+Entry states: `pending` → `processing` → `ready`, plus `failed`, `ignored`, and
+`expired` (removed by retention).
+
+## Retention
+
+Off by default — nothing is ever deleted unless you ask.
+
+```yaml
+retention:
+  enabled: true
+  max_age_days: 90
+  max_episodes: 1000
+```
+
+Either limit can trigger removal. Episodes added by hand with `vocast add` are
+protected unless you set `include_manual: true`, since they cannot be
+regenerated from a feed.
+
+```
+vocast retention apply --dry-run     # show what would go
+vocast retention apply               # do it
+```
+
+The database row survives as an `expired` marker. That is deliberate: deleting
+it would let the next poll rediscover the article and narrate it again.
+
+> [!NOTE]
+> Removing an episode from the feed does **not** delete it from podcast apps
+> that already downloaded it. Those copies live on the device.
+
+## Configuration
+
+Precedence: built-in defaults → `config.yaml` → environment variables.
+
+The config file is looked up at `$VOCAST_CONFIG`, then `~/.vocast/config.yaml`,
+then `/data/config.yaml`. A full annotated example is in
+[config.example.yaml](config.example.yaml). Inspect what is actually in effect
+with `vocast config show` (secrets are masked).
+
+Environment variables follow `VOCAST_<SECTION>_<KEY>`:
+
+| Variable | Default |
+|---|---|
+| `VOCAST_CONFIG` | auto-discovered |
+| `VOCAST_SERVER_HOST` | `127.0.0.1` |
+| `VOCAST_SERVER_PORT` | `8080` |
+| `VOCAST_SERVER_PUBLIC_BASE_URL` | derived per request |
+| `VOCAST_DATABASE_PATH` | `~/.vocast/vocast.db` |
+| `VOCAST_STORAGE_LIBRARY_PATH` | `~/.vocast/library` |
+| `VOCAST_POLLING_DEFAULT_INTERVAL_MINUTES` | `15` |
+| `VOCAST_WORKER_CONCURRENCY` | `1` |
+| `VOCAST_WORKER_PROCESSING_TIMEOUT_MINUTES` | `60` |
+| `VOCAST_WORKER_MAX_RETRIES` | `5` |
+| `VOCAST_WORKER_BASE_RETRY_MINUTES` | `5` |
+| `VOCAST_WORKER_MAX_RETRY_MINUTES` | `360` |
+| `VOCAST_RETENTION_ENABLED` | `false` |
+| `VOCAST_RETENTION_MAX_AGE_DAYS` | `90` |
+| `VOCAST_RETENTION_MAX_EPISODES` | `1000` |
+| `VOCAST_RETENTION_INCLUDE_MANUAL` | `false` |
+| `VOCAST_TTS_ENGINE` | `kokoro` |
+| `VOCAST_TTS_VOICE` | engine default (`af_heart`) |
+| `VOCAST_ADMIN_TOKEN` | unset (admin API open) |
+| `VOCAST_LOG_LEVEL` | `INFO` |
+| `VOCAST_ALLOW_PRIVATE_URLS` | `false` |
+
+**Secrets never need to be written into the YAML.** Any string value may
+reference the environment as `${VAR}`, or `${VAR:-fallback}`:
+
+```yaml
+sources:
+  - name: FreshRSS
+    kind: freshrss_feed
+    url: https://freshrss.example.com/i/?a=rss&get=c_1&token=${FRESHRSS_TOKEN}
+```
+
+A `${VAR}` with nothing set is a startup error rather than being sent literally
+as a credential.
+
+## HTTP API
+
+Feeds and `/api/health` are always public — podcast clients cannot send an
+`Authorization` header. Everything else requires
+`Authorization: Bearer $VOCAST_ADMIN_TOKEN` when a token is configured.
+
+```
+GET    /api/health
+GET    /api/sources
+POST   /api/sources
+PATCH  /api/sources/{id}
+DELETE /api/sources/{id}
+POST   /api/sources/{id}/poll
+GET    /api/entries?status=failed&source_id=1&limit=100
+POST   /api/entries/{id}/retry
+```
+
+`/api/health` reports application and database status, whether the worker and
+poller are running, pending and failed counts, and the last successful poll:
+
+```
+curl -s http://127.0.0.1:8000/api/health
+{"status":"ok","database":"ok","worker":"running","poller":"running",
+ "sources":1,"pending":0,"failed":0,"last_successful_poll":"2026-07-25T09:55:48Z"}
+```
+
+## Reverse proxy
+
+Caddy is not required, but it is the shortest path to a working HTTPS feed:
+
+```caddy
+podcast.example.com {
+    reverse_proxy vocast:8000
+}
+```
+
+Then set `VOCAST_SERVER_PUBLIC_BASE_URL=https://podcast.example.com`, or the
+feed will advertise unreachable internal URLs.
+
+If you would rather not expose anything publicly, `vocast init` walks through
+serving the feed over your tailnet with `tailscale serve` — but see the note
+above about apps that proxy feed fetches through their own servers.
+
+## Data locations and backups
+
+| What | Default | In Docker |
+|---|---|---|
+| Ingestion state | `~/.vocast/vocast.db` | `/data/vocast.db` |
+| Episodes | `~/.vocast/library/<id>/` | `/data/library/<id>/` |
+| Model cache | `~/.cache/huggingface` | `/data/cache/huggingface` |
+
+Each episode directory holds `audio.mp3` and `meta.json` — unchanged from
+earlier vocast versions.
+
+Back up the database and the library together. The database is SQLite in WAL
+mode, so copy it with `sqlite3` rather than `cp` while the service is running:
+
+```
+sqlite3 /data/vocast.db ".backup '/backup/vocast.db'"
+tar czf /backup/library.tar.gz -C /data library
+```
+
+The model cache is disposable; it re-downloads.
+
+If you lose the database but keep the library, existing episodes still appear in
+`/feed.xml` (the library is what the feed is built from), but articles will be
+rediscovered and narrated again, since the dedup records are gone.
+
+## Security considerations
+
+**SSRF.** Source and article URLs are supplied by you, and articles can
+redirect anywhere, so every outbound request is a request your server makes on
+someone else's behalf. All of them go through one guarded layer that:
+
+- allows only `http` and `https`;
+- refuses loopback, private, link-local, reserved, and multicast addresses by
+  default, which blocks cloud metadata endpoints such as `169.254.169.254`
+  (including their IPv4-mapped IPv6 forms);
+- checks *every* address a hostname resolves to, not just the first;
+- re-validates each redirect hop, so a public URL cannot bounce to localhost;
+- caps response size (10 MB default) and applies timeouts to every request.
+
+`allow_private_urls`, and the per-source `--allow-private`, deliberately switch
+the address check off so you can reach a LAN FreshRSS. **Only point it at hosts
+you trust.** With it enabled for a source, a malicious feed in that source can
+make your server fetch internal addresses. Prefer the per-source flag over the
+global one.
+
+**Admin API.** Write endpoints are unauthenticated unless `VOCAST_ADMIN_TOKEN`
+is set. That is fine on a loopback bind and not fine otherwise; the service logs
+a warning when it binds a non-loopback interface without a token. The bundled
+Compose file binds to `127.0.0.1` for this reason.
+
+**Credentials.** Feed credentials are never logged and are never returned by the
+API; `vocast config show` masks them. Prefer `${VAR}` references over literals
+in the config file.
+
+**Other.** Titles and URLs from third-party feeds are XML-escaped on the way
+into the feed. Episode ids from URL paths are validated, so they cannot escape
+the library directory. Retention refuses to delete anything outside the
+configured library path. Article content is only ever parsed and narrated, never
+executed.
+
+## Known limitations
+
+- **Narration is literal.** The article body is read as extracted. No
+  summarizing, rewriting, or translation, and no LLM is involved.
+- **Extraction is imperfect.** Paywalls, consent walls, and
+  JavaScript-rendered pages often yield too little text. Vocast fails those
+  loudly (they land in `failed`) rather than publishing an empty episode.
+- **Code blocks are dropped**, as they were before — they do not translate to
+  audio.
+- **One voice.** No per-source voices, no multiple narrators, no diarization.
+- **Single process.** The poller, worker, and server share one process and one
+  SQLite file. Fine for a homelab; there is no distributed queue and no
+  Kubernetes story.
+- **`worker.concurrency > 1` multiplies memory**, because each worker loads its
+  own copy of the TTS model.
+- **No played/read synchronization.** Marking an episode played in a podcast app
+  does not feed back to FreshRSS, by design.
+- **No web UI.** CLI and JSON API only.
+- **Python 3.10–3.12**, because Kokoro does not support 3.13 yet.
+
+## Troubleshooting
+
+**Nothing is being discovered.** Check the source is enabled and when it was
+last polled: `vocast source list` shows a `LAST OK` column and flags errors.
+Force a fetch with `vocast poll` and read the log line — it names the source,
+the URL, the stage, and the error.
+
+**`private, loopback, and link-local addresses are blocked`.** The feed or
+article is on a private address. Add `--allow-private` to that source, or set
+`allow_private_urls: true`. See the security note first.
+
+**Entries stay `pending`.** Nothing is running the queue. Use `vocast run`, or
+`vocast worker`, and confirm with `curl /api/health` that `worker` is
+`running`. Entries with a future `next_retry_at` are waiting on backoff — check
+`vocast entry show <id>`.
+
+**`extracted only N characters ... below the 400 character minimum`.** The page
+was a paywall, consent screen, or navigation stub. Confirm with
+`vocast add <url>`; if that also fails, the page is not extractable and the
+article cannot be narrated.
+
+**Episodes generate but the podcast app shows nothing.** Almost always
+`public_base_url`. Fetch the feed from *outside* your network and check that the
+`enclosure` URLs resolve. If the app is Overcast or Pocket Casts, the feed must
+be publicly reachable — those fetch through their own servers.
+
+**Episodes appear but will not play.** Fetch an enclosure URL directly; it
+should return `200` with `Content-Type: audio/mpeg`. A `404` means the audio
+file is missing from the library while the metadata remains.
+
+**An entry is stuck in `processing`.** A worker died mid-synthesis. It is
+requeued automatically after `worker.processing_timeout_minutes` (60 by
+default); `vocast entry retry <id> --force` does it now.
+
+**`ModuleNotFoundError: No module named 'kokoro'`.** Installed without
+dependencies. The ingestion CLI and tests run without Kokoro, but synthesis
+needs it: `pip install vocast`.
+
+**Container is killed mid-episode.** PyTorch needs headroom; raise
+`mem_limit` past 2 GB. The entry returns to `pending` and is retried, so nothing
+is lost.
+
+**Weights re-download on every container start.** `HF_HOME` must land on the
+`/data` volume. The bundled Compose file handles this.
