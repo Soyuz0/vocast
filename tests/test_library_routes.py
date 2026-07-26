@@ -476,3 +476,24 @@ def test_status_dots_appear_beside_each_status(client: TestClient, context: AppC
     assert ".dot-status.ready{background:var(--color-success)}" in body
     assert ".dot-status.failed{background:var(--color-error)}" in body
     assert ".dot-status.processing{background:var(--color-warning)" in body
+
+
+def test_mobile_header_offers_refresh(client: TestClient, context: AppContext):
+    """The list is server-rendered, so seeing new episodes means reloading."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert "data-refresh" in body
+    assert "location.reload()" in body
+
+
+def test_sidebar_does_not_report_generation_progress(
+    client: TestClient, context: AppContext
+):
+    """Removed deliberately: it competed with the status facet, which already
+    shows a processing count, and reported nothing actionable."""
+    _add_entry(context, status=EntryStatus.PROCESSING)
+    body = client.get("/library").text
+
+    assert "Generating" not in body
+    assert 'class="gen"' not in body

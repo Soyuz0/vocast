@@ -64,12 +64,6 @@ input,button,select{font-family:inherit;font-size:inherit}
 .chipbtn[aria-pressed="true"]{background:var(--bg-purple);color:var(--color-purple-light)}
 .chipbtn .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
 .side .grow{flex:1}
-.gen{border:1px solid var(--stroke-green);background:var(--bg-green);border-radius:var(--radius-md);
-  padding:var(--space-2) 10px;font-size:13px;color:var(--color-success)}
-.gen .bar{margin-top:6px;height:3px;border-radius:var(--radius-pill);background:rgba(52,197,162,.25);overflow:hidden}
-.gen .bar span{display:block;height:100%;width:35%;border-radius:inherit;background:var(--color-success);
-  animation:slide 1.9s var(--ease) infinite}
-@keyframes slide{0%{transform:translateX(-110%)}100%{transform:translateX(320%)}}
 .ghost{border:1px solid var(--stroke-bold);background:transparent;color:var(--text-white);
   border-radius:var(--radius-sm);padding:9px var(--space-3);cursor:pointer;font-size:14px;
   transition:background var(--fast) var(--ease)}
@@ -195,7 +189,8 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
     background:linear-gradient(180deg,var(--color-purple-main),var(--color-success));flex:none}
   .mobilebar b{font-size:19px;letter-spacing:-.02em}
   .mobilebar .count{margin-left:0}
-  .mobilebar .iconbtn{margin-left:auto}
+  .mobilebar [data-refresh]{margin-left:auto}
+  .mobilebar .iconbtn+.iconbtn{margin-left:0}
   .iconbtn{width:40px;height:40px;flex:none;border:1px solid var(--bg-3);border-radius:var(--radius-pill);
     background:var(--bg-2);color:var(--color-purple-light);cursor:pointer;font-size:13px}
 
@@ -308,13 +303,6 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
 
     <div class="grow"></div>
 
-    {% set generating = facets.by_status.get('processing', 0) %}
-    {% if generating %}
-    <div class="gen">
-      Generating {{ generating }} episode{{ '' if generating == 1 else 's' }}
-      <span class="bar"><span></span></span>
-    </div>
-    {% endif %}
     <button class="ghost" type="button" data-copy-feed>Copy feed URL</button>
   </aside>
 
@@ -323,7 +311,8 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
       <span class="dot" aria-hidden="true"></span>
       <b>{{ 'Listen Later' if q.queued == 'yes' else 'Library' }}</b>
       <span class="count">{{ facets.queued if q.queued == 'yes' else facets.total }}</span>
-      <button class="ghost" type="button" data-copy-feed>Copy feed</button>
+      <button class="iconbtn" type="button" data-refresh aria-label="Refresh">&#8635;</button>
+      <button class="iconbtn" type="button" data-copy-feed aria-label="Copy feed URL">&#128203;</button>
     </div>
 
     <form class="toolbar" method="get" action="{{ base_path }}/library">
@@ -641,6 +630,13 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
       method: 'DELETE', credentials: 'same-origin'
     });
     if (response.ok) location.reload();
+  });
+
+  // ---- refresh: the list is server-rendered, so a reload is the whole story
+  var refresh = document.querySelector('[data-refresh]');
+  if (refresh) refresh.addEventListener('click', function () {
+    refresh.disabled = true;
+    location.reload();
   });
 
   // ---- filters: an inline panel on wide screens, a bottom sheet on mobile.
