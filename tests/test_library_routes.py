@@ -433,3 +433,46 @@ def test_no_token_configured_leaves_the_internet_path_open(
 ):
     """Nothing to enforce, so a deployment without a token is unchanged."""
     assert client.get("/api/health", headers=FUNNEL).status_code == 200
+
+
+# --- the mobile direction --------------------------------------------------
+
+
+def test_mobile_patterns_are_present(client: TestClient, context: AppContext):
+    """The mobile design is its own layout, not a narrower desktop.
+
+    A bottom tab bar, a filter sheet and a pill search are what make it usable
+    one-handed, so their absence is a regression worth catching.
+    """
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert 'class="tabbar"' in body  # bottom navigation
+    assert "data-open-filters" in body  # opens the sheet
+    assert "data-close-filters" in body  # Done button inside it
+    assert "sheetchrome" in body  # grab handle and title
+    assert "@media (max-width:860px)" in body
+
+
+def test_filter_count_badge_reflects_active_filters(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context)
+
+    plain = client.get("/library?search=Article").text
+    filtered = client.get("/library?search=Article&status=ready&queued=no").text
+
+    # Searching and sorting are not "filters" for badge purposes; narrowing is.
+    assert '<span class="filtern">' not in plain
+    assert '<span class="filtern">2</span>' in filtered
+
+
+def test_status_dots_appear_beside_each_status(client: TestClient, context: AppContext):
+    """Colour is the fastest way to read state in a long list."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert 'class="dot-status ready"' in body
+    assert ".dot-status.ready{background:var(--color-success)}" in body
+    assert ".dot-status.failed{background:var(--color-error)}" in body
+    assert ".dot-status.processing{background:var(--color-warning)" in body

@@ -139,8 +139,20 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
 .badge.processing::before{animation:pulse 1.4s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
 .badge.pending{color:var(--text-grey)}
+/* One source of truth for what each state looks like, so the sidebar dots and
+   the row badges cannot drift apart. */
+.dot-status{width:8px;height:8px;border-radius:50%;flex:none;background:var(--text-grey)}
+.dot-status.ready{background:var(--color-success)}
+.dot-status.failed{background:var(--color-error)}
+.dot-status.processing{background:var(--color-warning);animation:pulse 1.4s ease-in-out infinite}
+.dot-status.pending{background:var(--text-grey)}
+.dot-status.ignored,.dot-status.expired{background:var(--text-dark-grey)}
 .badge.ignored,.badge.expired{color:var(--text-dark-grey)}
 .dl{color:var(--color-purple-light);font-size:12px;white-space:nowrap}
+/* The row badge carries status on wide screens; on mobile it moves inline with
+   the byline, where there is no room for a separate column. */
+.mobstatus{display:none;align-items:center;gap:6px}
+@media (max-width:860px){.mobstatus{display:inline-flex}}
 .meta{font-family:var(--font-mono);font-size:12px;color:var(--text-grey);text-align:right;white-space:nowrap}
 .play{width:36px;height:36px;flex:none;border-radius:50%;cursor:pointer;border:1px solid var(--color-purple-main);
   background:var(--bg-purple);color:var(--color-purple-light);font-size:13px}
@@ -168,28 +180,89 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
-/* ---- mobile ---- */
+/* ---- mobile: the design's own patterns, not just a narrower desktop ----
+   Pill controls, a bottom sheet for filters, a bottom tab bar, and rows that
+   stack the metadata under a clamped title. */
+.sheetchrome,.tabbar,.mobilebar,.mobileonly{display:none}
+@media (max-width:860px){.mobileonly{display:block}}
 @media (max-width:860px){
   .shell{flex-direction:column}
   .side{display:none}
-  main{padding:var(--space-3);gap:var(--space-2)}
-  .mobilebar{display:flex;align-items:center;gap:var(--space-2)}
-  .mobilebar .dot{width:24px;height:24px;border-radius:var(--radius-sm);
-    background:linear-gradient(180deg,var(--color-purple-main),var(--color-success))}
-  .mobilebar b{font-size:17px}
-  .mobilebar .count{margin-left:auto}
+  main{padding:0 0 76px;gap:0}
+
+  .mobilebar{display:flex;align-items:center;gap:10px;padding:var(--space-3) var(--space-3) 12px}
+  .mobilebar .dot{width:24px;height:24px;border-radius:var(--radius-pill);
+    background:linear-gradient(180deg,var(--color-purple-main),var(--color-success));flex:none}
+  .mobilebar b{font-size:19px;letter-spacing:-.02em}
+  .mobilebar .count{margin-left:0}
+  .mobilebar .iconbtn{margin-left:auto}
+  .iconbtn{width:40px;height:40px;flex:none;border:1px solid var(--bg-3);border-radius:var(--radius-pill);
+    background:var(--bg-2);color:var(--color-purple-light);cursor:pointer;font-size:13px}
+
+  .toolbar{padding:0 var(--space-3) 12px;border-bottom:1px solid var(--stroke);gap:10px}
+  .search{min-width:0}
+  .search input{height:46px;border-radius:var(--radius-pill);border-color:var(--bg-3);padding:0 var(--space-3)}
   .search kbd{display:none}
-  .range{width:100%;margin-left:0}
-  .row{grid-template-columns:1fr auto;gap:var(--space-2);row-gap:6px}
-  .row .statuscell{grid-column:1;display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}
-  .row .meta{grid-column:1;text-align:left}
-  .row .qbtn{grid-column:2;grid-row:1}
-  .row .play{grid-column:2;grid-row:2}
+  .toolbar select,.toolbar .primary,.range{display:none}
+  .filterbtn{display:flex;align-items:center;justify-content:center;position:relative;
+    width:46px;height:46px;flex:none;border:1px solid var(--bg-3);border-radius:var(--radius-pill);
+    background:var(--bg-2);color:var(--text-white);cursor:pointer}
+  .filterbtn .filtern{position:absolute;top:-3px;right:-3px;min-width:20px;height:20px;padding:0 5px;
+    border-radius:var(--radius-pill);background:var(--color-button-main);color:#fff;
+    font-size:10.5px;line-height:20px;text-align:center}
+
+  .chips{padding:10px var(--space-3);overflow-x:auto;flex-wrap:nowrap}
+  .chips>*{flex:none}
+  .queuehead{margin:10px var(--space-3);border-radius:var(--radius-md)}
+
+  /* filters become a bottom sheet */
+  .panel-wrap{position:fixed;inset:0;z-index:5;background:rgba(10,10,14,.66);
+    display:none;align-items:flex-end}
+  .panel-wrap[open]{display:flex}
+  .panel-wrap>summary{display:none}
+  .sheetchrome{display:flex;align-items:center;gap:12px;padding-top:6px}
+  .sheetchrome b{font-size:16px}
+  .sheetchrome .handle{position:absolute;left:50%;top:8px;margin-left:-19px;width:38px;height:4px;
+    border-radius:var(--radius-pill);background:var(--bg-4)}
+  .sheetchrome .reset{margin-left:auto;background:none;border:0;color:var(--color-text-link);
+    text-decoration:underline;cursor:pointer;font-size:13px}
+  .panel{position:relative;width:100%;max-height:86vh;overflow-y:auto;background:var(--bg-2);
+    border:0;border-top:1px solid var(--bg-4);border-radius:20px 20px 0 0;
+    padding:var(--space-3) var(--space-3) var(--space-4);grid-template-columns:1fr;gap:var(--space-4);
+    animation:sheet 220ms cubic-bezier(.22,.8,.3,1)}
+  @keyframes sheet{from{transform:translateY(14%)}to{transform:none}}
+  .pill{padding:9px 14px;font-size:14px}
+
+  /* rows: clamped title, metadata beneath, one tap target on the right */
+  .rows{gap:0}
+  .row{grid-template-columns:1fr 46px;gap:14px;padding:15px var(--space-3);
+    background:transparent;border:0;border-bottom:1px solid var(--stroke);border-radius:0}
+  .row:hover{background:transparent}
+  .row .title{font-size:15.5px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+    overflow:hidden;text-wrap:pretty}
+  .row .byline{font-size:12px}
+  .row .byline>span:first-child{color:var(--color-purple-light)}
+  .row .statuscell,.row .meta{display:none}
+  .row .qbtn{grid-column:2;grid-row:1;width:46px;height:46px;border-radius:var(--radius-pill);
+    align-self:center;font-size:19px}
+  .row .play{display:none}
+  .empty{margin:var(--space-4) var(--space-3)}
+  .pager{padding:var(--space-3)}
+  .pager .summary{display:none}
+
+  .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:4;display:flex;
+    background:var(--bg-2);border-top:1px solid var(--stroke);padding:6px 8px}
+  .tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;
+    padding:8px 0;border-radius:var(--radius-sm);color:var(--text-grey);font-size:12px;position:relative}
+  .tabbar a[aria-current="page"]{color:var(--color-purple-light);background:var(--bg-purple)}
+  .tabbar .n{font-family:var(--font-mono);font-size:11px}
+  .player{position:fixed;left:8px;right:8px;bottom:74px;z-index:4}
 }
 </style>
 </head>
 <body>
 {% set q = current_query %}
+{% set active_filters = q | reject('in', ['search', 'sort', 'page', 'page_size']) | list | length %}
 <div class="shell">
   <aside class="side">
     <div class="brand"><span class="dot" aria-hidden="true"></span><span>Vocast</span></div>
@@ -213,6 +286,7 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
         {% if n %}
         <a class="chipbtn" href="{{ link(status=(None if q.status == status.value else status.value), page=None) }}"
            aria-pressed="{{ 'true' if q.status == status.value else 'false' }}">
+          <span class="dot-status {{ status.value }}" aria-hidden="true"></span>
           <span class="label">{{ status.value }}</span><span class="count">{{ n }}</span>
         </a>
         {% endif %}
@@ -271,12 +345,44 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
         {% endfor %}
       </select>
       <button class="primary" type="submit">Search</button>
+      <button class="filterbtn" type="button" data-open-filters aria-label="Filters and sort">
+        &#9776;{% if active_filters %}<span class="filtern">{{ active_filters }}</span>{% endif %}
+      </button>
       <span class="range">{{ page.total }} article{{ '' if page.total == 1 else 's' }}</span>
     </form>
 
     <details class="panel-wrap" {% if q.min_duration_seconds or q.max_duration_seconds or q.downloaded %}open{% endif %}>
       <summary class="ghost" style="display:inline-block;margin-bottom:var(--space-2);cursor:pointer">Filters</summary>
       <div class="panel">
+        <div class="sheetchrome">
+          <span class="handle" aria-hidden="true"></span>
+          <b>Filter &amp; sort</b>
+          <a class="reset" href="{{ base_path }}/library">Reset all</a>
+        </div>
+        <div class="mobileonly">
+          <h3>Sort</h3>
+          <div class="pills">
+            {% for value, label in [
+              ('published_desc','Newest'), ('published_asc','Oldest'),
+              ('title_asc','Title A-Z'), ('duration_desc','Longest'),
+              ('duration_asc','Shortest')] %}
+            <a class="pill" aria-pressed="{{ 'true' if page.query.sort == value else 'false' }}"
+               href="{{ link(sort=value, page=None) }}">{{ label }}</a>
+            {% endfor %}
+          </div>
+        </div>
+        <div>
+          <h3>Status</h3>
+          <div class="pills mobileonly-pills">
+            {% for status in statuses %}
+            {% if facets.by_status.get(status.value, 0) %}
+            <a class="pill" aria-pressed="{{ 'true' if q.status == status.value else 'false' }}"
+               href="{{ link(status=(None if q.status == status.value else status.value), page=None) }}">
+              {{ status.value }} {{ facets.by_status.get(status.value, 0) }}</a>
+            {% endif %}
+            {% endfor %}
+          </div>
+        </div>
         <div>
           <h3>Length</h3>
           <div class="pills">
@@ -306,6 +412,9 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
             <a class="pill" aria-pressed="{{ 'true' if q.downloaded == 'no' else 'false' }}"
                href="{{ link(downloaded=(None if q.downloaded == 'no' else 'no'), page=None) }}">Not downloaded</a>
           </div>
+        </div>
+        <div class="mobileonly">
+          <button class="primary" type="button" data-close-filters style="width:100%">Done</button>
         </div>
       </div>
     </details>
@@ -353,6 +462,10 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
             {% if item.author %}<span class="sep">&middot;</span><span>{{ item.author }}</span>{% endif %}
             {% if item.source_name != item.origin_name %}
             <span class="sep">&middot;</span><span>via {{ item.source_name }}</span>{% endif %}
+            <span class="sep">&middot;</span>
+            <span class="mobstatus">
+              <span class="dot-status {{ item.status.value }}" aria-hidden="true"></span>{{ item.status.value }}
+            </span>
             <span class="sep">&middot;</span>
             <a href="{{ item.article_url }}" target="_blank" rel="noopener noreferrer">Original</a>
           </div>
@@ -402,6 +515,17 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
       <a class="pill" href="{{ base_path }}/library">Reset filters</a>
     </div>
     {% endif %}
+
+    <nav class="tabbar" aria-label="Views">
+      <a href="{{ link(queued=None, page=None) }}"
+         {% if not q.queued %}aria-current="page"{% endif %}>
+        Library <span class="n">{{ facets.total }}</span>
+      </a>
+      <a href="{{ link(queued='yes', page=None) }}"
+         {% if q.queued == 'yes' %}aria-current="page"{% endif %}>
+        Listen Later <span class="n">{{ facets.queued }}</span>
+      </a>
+    </nav>
 
     <div class="player" hidden data-player>
       <div class="now">
@@ -517,6 +641,26 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
       method: 'DELETE', credentials: 'same-origin'
     });
     if (response.ok) location.reload();
+  });
+
+  // ---- filters: an inline panel on wide screens, a bottom sheet on mobile.
+  // Both are the same <details>, so there is one copy of the controls.
+  var filters = document.querySelector('.panel-wrap');
+  function setFilters(open) {
+    if (open) { filters.setAttribute('open', ''); } else { filters.removeAttribute('open'); }
+  }
+  var openFilters = document.querySelector('[data-open-filters]');
+  if (openFilters) openFilters.addEventListener('click', function () {
+    setFilters(!filters.hasAttribute('open'));
+  });
+  var closeFilters = document.querySelector('[data-close-filters]');
+  if (closeFilters) closeFilters.addEventListener('click', function () { setFilters(false); });
+  // Tapping the dimmed backdrop closes it; taps inside the sheet must not.
+  filters.addEventListener('click', function (event) {
+    if (event.target === filters) setFilters(false);
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') setFilters(false);
   });
 
   // ---- "/" focuses search, the one shortcut worth having
