@@ -386,10 +386,14 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
         state.context.entries.requeue(entry_id)
         return JSONResponse({"entry_id": entry_id, "status": EntryStatus.PENDING.value})
 
-    @router.post(
-        "/api/playlists/listen-later/entries/{entry_id}",
-        dependencies=[Depends(require_admin)],
-    )
+    # Deliberately not behind the admin token. Queueing an episode is ordinary
+    # use of the library, and the library is already gated: over the internet
+    # the app-wide guard demands the feed token, and on the tailnet access is
+    # trusted by design. Asking for a second, different secret to click a button
+    # on a page you already authenticated to is friction without a threat model.
+    # Same-origin is still enforced, and the administrative endpoints are
+    # unchanged.
+    @router.post("/api/playlists/listen-later/entries/{entry_id}")
     def add_listen_later(entry_id: int, request: Request) -> JSONResponse:
         _require_same_origin(state, request)
         if state.context.entries.get(entry_id) is None:
@@ -400,10 +404,7 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
             status_code=201 if added else 200,
         )
 
-    @router.delete(
-        "/api/playlists/listen-later/entries/{entry_id}",
-        dependencies=[Depends(require_admin)],
-    )
+    @router.delete("/api/playlists/listen-later/entries/{entry_id}")
     def remove_listen_later(entry_id: int, request: Request) -> JSONResponse:
         _require_same_origin(state, request)
         if state.context.entries.get(entry_id) is None:

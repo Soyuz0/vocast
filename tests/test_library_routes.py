@@ -149,20 +149,41 @@ def test_actions_reject_unknown_entries(client: TestClient, method: str):
     assert response.json()["detail"] == "unknown entry"
 
 
-def test_actions_require_existing_admin_authentication(
+def test_queueing_needs_no_second_credential(client: TestClient, context: AppContext):
+    """Loading the library already proved access.
+
+    Demanding the admin token as well meant a prompt for a different secret on
+    every click, on a page the caller had already authenticated to.
+    """
+    entry = _add_entry(context)
+    context.config = replace(context.config, admin_token="admin-secret")
+
+    response = client.post(
+        f"/api/playlists/listen-later/entries/{entry.id}",
+        headers={"origin": "http://testserver"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["queued"] is True
+
+
+def test_queueing_still_refuses_a_cross_origin_request(
     client: TestClient, context: AppContext
 ):
     entry = _add_entry(context)
-    context.config = replace(context.config, admin_token="not-for-html")
-    path = f"/api/playlists/listen-later/entries/{entry.id}"
+    response = client.post(
+        f"/api/playlists/listen-later/entries/{entry.id}",
+        headers={"origin": "https://evil.example"},
+    )
+    assert response.status_code == 403
 
-    assert client.post(path).status_code == 401
-    accepted = client.post(path, headers={"Authorization": "Bearer not-for-html"})
 
-    assert accepted.status_code == 201
-    body = client.get("/library").text
-    assert "not-for-html" not in body
-    assert "kept only in this browser tab" in body
+def test_administrative_endpoints_still_require_the_admin_token(
+    client: TestClient, context: AppContext
+):
+    """Only playlist curation was relaxed."""
+    context.config = replace(context.config, admin_token="admin-secret")
+    assert client.get("/api/sources").status_code == 401
 
 
 def test_actions_reject_cross_origin_browser_requests(

@@ -171,9 +171,6 @@
       </form>
     </details>
 
-    {% if admin_token_required %}
-      <p class="auth-note">Listen Later changes require the admin token. It is requested on first use and kept only in this browser tab.</p>
-    {% endif %}
     <p class="summary">{{ page.total }} matching article{{ '' if page.total == 1 else 's' }}</p>
 
     {% if page.items %}
@@ -223,14 +220,15 @@
   </main>
   <script>
     (function () {
-      var key = 'vocast_admin_token';
-      function token() { try { return sessionStorage.getItem(key); } catch (_) { return null; } }
-      function store(value) { try { sessionStorage.setItem(key, value); } catch (_) {} }
-      async function send(button, method, bearer) {
-        var headers = { 'Content-Type': 'application/json' };
-        if (bearer) headers.Authorization = 'Bearer ' + bearer;
+      // Queueing needs no separate credential: loading this page already
+      // proved access, so the request just carries the session cookie.
+      async function send(button, method) {
         var basePath = document.querySelector('main').dataset.basePath;
-        return fetch(basePath + '/api/playlists/listen-later/entries/' + button.dataset.entryId, { method: method, headers: headers });
+        return fetch(basePath + '/api/playlists/listen-later/entries/' + button.dataset.entryId, {
+          method: method,
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin'
+        });
       }
       document.addEventListener('click', async function (event) {
         var button = event.target.closest('[data-queue-button]');
@@ -241,14 +239,11 @@
         message.className = 'message';
         message.textContent = '';
         try {
-          var response = await send(button, queued ? 'DELETE' : 'POST', token());
-          if (response.status === 401) {
-            var supplied = window.prompt('Vocast admin token');
-            if (!supplied) throw new Error('Admin token required');
-            store(supplied);
-            response = await send(button, queued ? 'DELETE' : 'POST', supplied);
-          }
-          if (!response.ok) throw new Error(response.status === 404 ? 'Article no longer exists' : 'Could not update Listen Later');
+          var response = await send(button, queued ? 'DELETE' : 'POST');
+          if (!response.ok) throw new Error(
+            response.status === 404 ? 'Article no longer exists'
+            : response.status === 401 ? 'Session expired — reload with your token'
+            : 'Could not update Listen Later');
           var next = !queued;
           button.dataset.queued = next ? 'true' : 'false';
           button.setAttribute('aria-pressed', next ? 'true' : 'false');

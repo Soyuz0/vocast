@@ -33,18 +33,18 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
         request: Request,
         token: str | None = None,
         search: str | None = None,
-        source_id: int | None = None,
+        source_id: str | None = None,
         origin_id: str | None = None,
         status: str | None = None,
         queued: str | None = None,
         downloaded: str | None = None,
         published_after: str | None = None,
         published_before: str | None = None,
-        min_duration_seconds: int | None = None,
-        max_duration_seconds: int | None = None,
+        min_duration_seconds: str | None = None,
+        max_duration_seconds: str | None = None,
         sort: str = "published_desc",
-        page: int = 1,
-        page_size: int = 50,
+        page: str | None = None,
+        page_size: str | None = None,
     ) -> Response:
         # Internet requests are already rejected by the app-wide guard, which
         # covers every path because Funnel publishes every path. This handles
@@ -56,18 +56,22 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
                 return redirect
         query = LibraryQuery(
             search=search,
-            source_id=source_id,
+            source_id=_optional_int(source_id, "source_id"),
             origin_id=origin_id,
             status=_status(status),
             queued=_boolean(queued, "queued"),
             downloaded=_boolean(downloaded, "downloaded"),
             published_after=_date_boundary(published_after, end=False),
             published_before=_date_boundary(published_before, end=True),
-            min_duration_seconds=min_duration_seconds,
-            max_duration_seconds=max_duration_seconds,
+            min_duration_seconds=_optional_int(
+                min_duration_seconds, "min_duration_seconds"
+            ),
+            max_duration_seconds=_optional_int(
+                max_duration_seconds, "max_duration_seconds"
+            ),
             sort=sort,
-            page=page,
-            page_size=page_size,
+            page=_optional_int(page, "page") or 1,
+            page_size=_optional_int(page_size, "page_size") or 50,
         )
         service = LibraryQueryService(state.context.db)
         result = service.search(query)
@@ -152,6 +156,21 @@ def _status(value: str | None) -> EntryStatus | None:
         return EntryStatus(value)
     except ValueError as exc:
         raise HTTPException(400, f"unknown status {value!r}") from exc
+
+
+def _optional_int(value: str | None, name: str) -> int | None:
+    """Parse a numeric filter, treating blank as absent.
+
+    Submitting the filter form sends every field, so an untouched number or
+    select arrives as an empty string. Declaring these as int would make the
+    whole page fail validation rather than simply not filtering on them.
+    """
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        raise HTTPException(400, f"{name} must be a whole number") from None
 
 
 def _boolean(value: str | None, name: str) -> bool | None:
