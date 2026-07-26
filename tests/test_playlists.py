@@ -6,9 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from vocast.ingest.db import SCHEMA_VERSION, Database, _MIGRATIONS, open_database
+from vocast.ingest.db import _MIGRATIONS, SCHEMA_VERSION, Database, open_database
 from vocast.ingest.models import FeedEntry
-from vocast.ingest.repository import EntryRepository, PlaylistRepository, SourceRepository
+from vocast.ingest.repository import (
+    EntryRepository,
+    PlaylistRepository,
+    SourceRepository,
+)
 from vocast.ingest.timeutils import utcnow
 
 
@@ -90,9 +94,7 @@ def test_entries_have_deterministic_playlist_order(repositories):
     second = _entry(entries, source.id, "second")
     positioned = _entry(entries, source.id, "positioned")
     playlists.add_entry("listen-later", first.id, added_at=now)
-    playlists.add_entry(
-        "listen-later", second.id, added_at=now + timedelta(minutes=1)
-    )
+    playlists.add_entry("listen-later", second.id, added_at=now + timedelta(minutes=1))
     playlists.add_entry("listen-later", positioned.id, position=1, added_at=now)
 
     assert [item.entry_id for item in playlists.entries("listen-later")] == [

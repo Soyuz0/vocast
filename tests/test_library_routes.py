@@ -113,9 +113,7 @@ def test_pagination_preserves_active_query(client: TestClient, context: AppConte
     _add_entry(context, title="Article A")
     _add_entry(context, title="Article B")
 
-    body = client.get(
-        "/library?search=Article&sort=title_asc&page_size=1&page=1"
-    ).text
+    body = client.get("/library?search=Article&sort=title_asc&page_size=1&page=1").text
 
     assert "Page 1 of 2" in body
     assert (
@@ -252,9 +250,11 @@ def test_public_library_requires_feed_token_and_exchanges_it_for_a_cookie(
     assert "library-secret" not in page.text
 
 
-def test_direct_tailnet_library_is_open_when_feed_token_is_configured(
-    client: TestClient, context: AppContext
-):
+FUNNEL = {"Tailscale-Funnel-Request": "?1"}
+
+
+def test_library_is_open_on_the_tailnet(client: TestClient, context: AppContext):
+    """Browsing from inside the tailnet should not require a token."""
     _add_entry(context)
     context.config = replace(
         context.config,
@@ -263,6 +263,30 @@ def test_direct_tailnet_library_is_open_when_feed_token_is_configured(
 
     response = client.get("/library")
 
+    assert response.status_code == 200
+    assert "An article" in response.text
+
+
+def test_library_requires_the_token_from_the_internet(
+    client: TestClient, context: AppContext
+):
+    """Funnel publishes every path, so the library is reachable publicly."""
+    _add_entry(context)
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, feed_token="feed-secret"),
+    )
+
+    assert client.get("/library", headers=FUNNEL).status_code == 401
+    assert client.get("/library?token=feed-secret", headers=FUNNEL).status_code != 401
+
+
+def test_library_is_open_when_no_token_is_configured(
+    client: TestClient, context: AppContext
+):
+    """A purely local deployment should not be forced to authenticate."""
+    _add_entry(context)
+    response = client.get("/library")
     assert response.status_code == 200
     assert "An article" in response.text
     assert "feed-secret" not in response.text
@@ -275,3 +299,99 @@ def test_direct_tailnet_library_is_open_when_feed_token_is_configured(
 def test_invalid_library_filters_return_clear_errors(client: TestClient, query: str):
     response = client.get(f"/library?{query}")
     assert response.status_code == 400
+
+
+def test_login_cookie_is_usable_over_plain_http(
+    client: TestClient, context: AppContext
+):
+    """The tailnet address is HTTP while public_base_url is HTTPS.
+
+    Deriving the cookie's Secure flag from the configured URL rather than the
+    actual connection would stop the browser ever sending it back, leaving the
+    page redirecting to itself.
+    """
+    _add_entry(context)
+    context.config = replace(
+        context.config,
+        server=replace(
+            context.config.server,
+            feed_token="feed-secret",
+            public_base_url="https://podcast.example.com",
+        ),
+    )
+
+    response = client.get("/library?token=feed-secret", follow_redirects=False)
+    assert response.status_code == 303
+    assert "secure" not in response.headers["set-cookie"].lower()
+
+    assert client.get("/library").status_code == 200
+
+
+def test_login_cookie_is_secure_behind_a_tls_proxy(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context)
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, feed_token="feed-secret"),
+    )
+
+    response = client.get(
+        "/library?token=feed-secret",
+        headers={"x-forwarded-proto": "https"},
+        follow_redirects=False,
+    )
+    assert "secure" in response.headers["set-cookie"].lower()
+
+
+# --- the public surface as a whole -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path", ["/", "/library", "/api/health", "/feeds/all.xml", "/feed.xml"]
+)
+def test_every_path_needs_the_token_from_the_internet(
+    client: TestClient, context: AppContext, path: str
+):
+    """The guard is app-wide on purpose: Funnel exposes every path, including
+    ones added later, so allow-listing individual routes would leak by
+    omission."""
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, feed_token="feed-secret"),
+    )
+    assert client.get(path, headers=FUNNEL).status_code == 401
+
+
+@pytest.mark.parametrize("path", ["/", "/library", "/api/health"])
+def test_those_same_paths_stay_open_on_the_tailnet(
+    client: TestClient, context: AppContext, path: str
+):
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, feed_token="feed-secret"),
+    )
+    assert client.get(path).status_code == 200
+
+
+def test_the_marker_cannot_be_used_to_bypass_anything(
+    client: TestClient, context: AppContext
+):
+    """Claiming to be a Funnel request only ever adds a requirement."""
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, feed_token="feed-secret"),
+    )
+    assert (
+        client.get(
+            "/api/health", headers={"Tailscale-Funnel-Request": "?0"}
+        ).status_code
+        == 401
+    )
+
+
+def test_no_token_configured_leaves_the_internet_path_open(
+    client: TestClient, context: AppContext
+):
+    """Nothing to enforce, so a deployment without a token is unchanged."""
+    assert client.get("/api/health", headers=FUNNEL).status_code == 200

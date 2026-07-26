@@ -5,10 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from vocast.ingest.db import Database, open_database
+from vocast.ingest.db import open_database
 from vocast.ingest.library_query import LibraryQuery, LibraryQueryService
 from vocast.ingest.models import EntryStatus, FeedEntry
-from vocast.ingest.repository import EntryRepository, PlaylistRepository, SourceRepository
+from vocast.ingest.repository import (
+    EntryRepository,
+    PlaylistRepository,
+    SourceRepository,
+)
 from vocast.ingest.timeutils import to_iso, utcnow
 
 
@@ -100,7 +104,16 @@ def library_data(tmp_path: Path):
         status=EntryStatus.FAILED,
     )
     PlaylistRepository(db).add_entry("listen-later", beta.id)
-    return db, LibraryQueryService(db), first_source, second_source, alpha, beta, gamma, now
+    return (
+        db,
+        LibraryQueryService(db),
+        first_source,
+        second_source,
+        alpha,
+        beta,
+        gamma,
+        now,
+    )
 
 
 @pytest.mark.parametrize(
@@ -132,7 +145,9 @@ def test_status_queue_and_download_filters(library_data):
     assert [item.title for item in service.search(LibraryQuery(queued=True)).items] == [
         "Beta release"
     ]
-    assert {item.title for item in service.search(LibraryQuery(queued=False)).items} == {
+    assert {
+        item.title for item in service.search(LibraryQuery(queued=False)).items
+    } == {
         "Alpha systems",
         "Gamma notes",
     }
@@ -166,7 +181,10 @@ def test_sorting_pagination_and_total_count(library_data):
     first_page = service.search(LibraryQuery(sort="title_asc", page=1, page_size=2))
     second_page = service.search(LibraryQuery(sort="title_asc", page=2, page_size=2))
 
-    assert [item.title for item in first_page.items] == ["Alpha systems", "Beta release"]
+    assert [item.title for item in first_page.items] == [
+        "Alpha systems",
+        "Beta release",
+    ]
     assert [item.title for item in second_page.items] == ["Gamma notes"]
     assert first_page.total == second_page.total == 3
     assert first_page.pages == 2
@@ -188,7 +206,10 @@ def test_invalid_page_values_are_bounded(library_data):
 
 def test_filter_options_are_distinct_and_sorted(library_data):
     _, service, first_source, second_source, *_ = library_data
-    assert [source.id for source in service.sources()] == [first_source.id, second_source.id]
+    assert [source.id for source in service.sources()] == [
+        first_source.id,
+        second_source.id,
+    ]
     assert [origin.name for origin in service.origins()] == [
         "Direct Publication",
         "Science Weekly",

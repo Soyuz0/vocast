@@ -107,7 +107,9 @@ class LibraryQueryService:
                 """,
                 tuple(params),
             ).fetchone()[0]
-            last_page = max(1, (total + normalized.page_size - 1) // normalized.page_size)
+            last_page = max(
+                1, (total + normalized.page_size - 1) // normalized.page_size
+            )
             normalized = replace(normalized, page=min(normalized.page, last_page))
             rows = conn.execute(
                 f"""
@@ -151,7 +153,9 @@ class LibraryQueryService:
                 ORDER BY origin_name COLLATE NOCASE
                 """
             ).fetchall()
-        return [LibraryOrigin(id=row["origin_id"], name=row["origin_name"]) for row in rows]
+        return [
+            LibraryOrigin(id=row["origin_id"], name=row["origin_name"]) for row in rows
+        ]
 
     def _normalize(self, query: LibraryQuery) -> LibraryQuery:
         search = query.search.strip() if query.search else None
@@ -191,7 +195,9 @@ class LibraryQueryService:
             clauses.append("e.status = ?")
             params.append(query.status.value)
         if query.queued is not None:
-            clauses.append("pe.entry_id IS NOT NULL" if query.queued else "pe.entry_id IS NULL")
+            clauses.append(
+                "pe.entry_id IS NOT NULL" if query.queued else "pe.entry_id IS NULL"
+            )
         if query.downloaded is not None:
             clauses.append(
                 "e.downloaded_at IS NOT NULL"

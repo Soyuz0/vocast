@@ -409,9 +409,7 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
         if state.context.entries.get(entry_id) is None:
             raise HTTPException(404, "unknown entry")
         removed = state.context.playlists.remove_entry("listen-later", entry_id)
-        return JSONResponse(
-            {"entry_id": entry_id, "queued": False, "changed": removed}
-        )
+        return JSONResponse({"entry_id": entry_id, "queued": False, "changed": removed})
 
 
 def _admin_guard(state: ServiceState):
@@ -450,7 +448,9 @@ def _require_same_origin(state: ServiceState, request: Request) -> None:
         configured_url = urllib.parse.urlsplit(configured)
         allowed.add(f"{configured_url.scheme}://{configured_url.netloc}")
     parsed = urllib.parse.urlsplit(origin)
-    normalized = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    normalized = (
+        f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    )
     if normalized not in allowed:
         raise HTTPException(403, "cross-origin playlist changes are not allowed")
 

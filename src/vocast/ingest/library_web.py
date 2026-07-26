@@ -46,7 +46,11 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
         page: int = 1,
         page_size: int = 50,
     ) -> Response:
-        if request.url.path.endswith("/public/library"):
+        # Internet requests are already rejected by the app-wide guard, which
+        # covers every path because Funnel publishes every path. This handles
+        # the remaining case: turning a ?token= into a cookie so the browser
+        # keeps working as you navigate.
+        if token or request.url.path.endswith("/public/library"):
             redirect = _require_library_token(state, request, token)
             if redirect is not None:
                 return redirect
@@ -72,18 +76,34 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
             for key, value in request.query_params.items()
             if key not in ("page", "token") and value != ""
         }
-        html = _templates().get_template("library.html").render(
-            page=result,
-            sources=service.sources(),
-            origins=service.origins(),
-            statuses=list(EntryStatus),
-            current_query=current_query,
-            pagination_query=urlencode(current_query),
-            admin_token_required=bool(state.context.config.admin_token),
-            feed_token_required=bool(state.context.config.server.feed_token),
-            base_path=urlsplit(state.base_url(request)).path.rstrip("/"),
+        html = (
+            _templates()
+            .get_template("library.html")
+            .render(
+                page=result,
+                sources=service.sources(),
+                origins=service.origins(),
+                statuses=list(EntryStatus),
+                current_query=current_query,
+                pagination_query=urlencode(current_query),
+                admin_token_required=bool(state.context.config.admin_token),
+                feed_token_required=bool(state.context.config.server.feed_token),
+                base_path=urlsplit(state.base_url(request)).path.rstrip("/"),
+            )
         )
         return HTMLResponse(html)
+
+
+def _is_secure(request: Request) -> bool:
+    """Whether the client's own connection is encrypted.
+
+    Behind a TLS-terminating proxy the request arrives as HTTP, so the
+    forwarded protocol header is authoritative when present.
+    """
+    forwarded = request.headers.get("x-forwarded-proto", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip().lower() == "https"
+    return request.url.scheme == "https"
 
 
 def _require_library_token(
@@ -114,7 +134,11 @@ def _require_library_token(
         _LIBRARY_TOKEN_COOKIE,
         expected,
         httponly=True,
-        secure=urlsplit(base).scheme == "https",
+        # Derived from how the client actually connected, not from the
+        # configured public URL. Those differ: the tailnet address is plain
+        # HTTP while public_base_url is HTTPS, and a Secure cookie would then
+        # never be sent back, leaving the page redirecting to itself forever.
+        secure=_is_secure(request),
         samesite="strict",
         path=base_path or "/",
     )

@@ -141,7 +141,13 @@ CREATE INDEX idx_playlist_entries_order
 ON playlist_entries(playlist_id, position, added_at);
 
 INSERT INTO playlists (slug, name, is_system, created_at, updated_at)
-VALUES ('listen-later', 'Listen Later', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+VALUES (
+    'listen-later', 'Listen Later', 1,
+    -- Matches the ISO-8601 UTC form every other timestamp uses; SQLite's
+    -- CURRENT_TIMESTAMP writes a space-separated, zoneless variant.
+    strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+    strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+)
 ON CONFLICT(slug) DO NOTHING;
 """
 

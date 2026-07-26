@@ -20,7 +20,11 @@ from vocast.ingest.feeds import (
     collect_playlist_episodes,
 )
 from vocast.ingest.models import EntryStatus, FeedEntry
-from vocast.ingest.repository import EntryRepository, PlaylistRepository, SourceRepository
+from vocast.ingest.repository import (
+    EntryRepository,
+    PlaylistRepository,
+    SourceRepository,
+)
 from vocast.ingest.timeutils import utcnow
 
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -899,18 +903,27 @@ def test_listen_later_removal_and_status_changes_are_immediate(
             published_at=utcnow(),
         )
     )
-    entries.mark_ready(entry.id, episode_id="stable-guid", duration_seconds=1, audio_bytes=1)
+    entries.mark_ready(
+        entry.id, episode_id="stable-guid", duration_seconds=1, audio_bytes=1
+    )
     playlists = PlaylistRepository(db)
     playlists.add_entry("listen-later", entry.id)
 
-    assert collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE)[
-        0
-    ].episode_id == "stable-guid"
+    assert (
+        collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE)[
+            0
+        ].episode_id
+        == "stable-guid"
+    )
     entries.set_status(entry.id, EntryStatus.FAILED)
-    assert collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE) == []
+    assert (
+        collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE) == []
+    )
     entries.set_status(entry.id, EntryStatus.READY)
     playlists.remove_entry("listen-later", entry.id)
-    assert collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE) == []
+    assert (
+        collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE) == []
+    )
 
 
 def test_listen_later_order_is_deterministic_and_uses_playlist_order(
