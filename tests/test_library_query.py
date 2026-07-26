@@ -237,3 +237,28 @@ def test_search_and_origin_ids_use_unicode_casefolding(library_data):
     assert [item.entry_id for item in by_title.items] == [entry.id]
     assert [item.entry_id for item in by_origin.items] == [entry.id]
     assert by_origin.items[0].origin_id == "café revue"
+
+
+def test_every_publication_appears_in_the_facet(library_data):
+    """A cap here silently hid publications from the filter, which made them
+    unreachable rather than merely unlisted."""
+    db, service = library_data[0], library_data[1]
+    sources, entries = SourceRepository(db), EntryRepository(db)
+    source = sources.add(name="Bulk", kind="rss", url="https://bulk.example.com/feed")
+    for n in range(60):
+        entries.insert_if_new(
+            FeedEntry(
+                source_id=source.id,
+                external_guid=f"bulk-{n}",
+                title=f"Article {n}",
+                article_url=f"https://articles.example.com/bulk-{n}",
+                published_at=utcnow(),
+                author="Author",
+                origin_name=f"Publication {n:02d}",
+            )
+        )
+
+    names = {origin.name for origin in service.facets().origins}
+
+    assert len([n for n in names if n.startswith("Publication ")]) == 60
+    assert "Publication 59" in names

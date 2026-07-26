@@ -549,3 +549,38 @@ def test_finished_entry_shows_no_progress(client: TestClient, context: AppContex
     stored = context.entries.get(entry.id)
     assert stored.progress_done is None
     assert 'role="progressbar"' not in client.get("/library").text
+
+
+def test_refresh_is_reachable_from_both_layouts(
+    client: TestClient, context: AppContext
+):
+    """The mobile header and the desktop toolbar each need their own control:
+    each is hidden at the other breakpoint."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert 'class="iconbtn" type="button" data-refresh' in body
+    assert 'class="ghost deskonly" type="button" data-refresh' in body
+    assert "querySelectorAll('[data-refresh]')" in body
+
+
+def test_publications_are_filterable_on_mobile(client: TestClient, context: AppContext):
+    """The publications facet lived only in the desktop sidebar, which is hidden
+    on mobile, leaving no way to filter by publication on a phone."""
+    _add_entry(context, title="One", origin="The Publication")
+    body = client.get("/library").text
+
+    assert "scrollfacet" in body
+    assert body.count("origin_id=the+publication") >= 2
+
+
+def test_selecting_a_publication_on_mobile_filters_the_list(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="Kept", origin="Wanted Publication")
+    _add_entry(context, title="Dropped", origin="Other Publication")
+
+    body = client.get("/library?origin_id=wanted publication").text
+
+    assert "Kept" in body
+    assert "Dropped" not in body

@@ -54,6 +54,9 @@ input,button,select{font-family:inherit;font-size:inherit}
 .side h2{font-size:13px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;
   color:var(--text-grey);margin:0 0 var(--space-2)}
 .side nav,.facet{display:flex;flex-direction:column;gap:2px}
+/* Every publication is listed, and there are dozens, so the list scrolls
+   within the sidebar rather than pushing the feed button off-screen. */
+.facet{max-height:min(46vh,420px);overflow-y:auto;scrollbar-width:thin}
 .navlink,.chipbtn{display:flex;align-items:center;gap:var(--space-2);width:100%;text-align:left;
   padding:9px var(--space-2);border:0;border-radius:var(--radius-sm);background:transparent;
   color:var(--text-white);cursor:pointer;transition:background var(--fast) var(--ease)}
@@ -72,6 +75,7 @@ input,button,select{font-family:inherit;font-size:inherit}
 /* ---- main ---- */
 main{flex:1;min-width:0;padding:var(--space-4);display:flex;flex-direction:column;gap:var(--space-3)}
 .mobilebar{display:none}
+.toolbar .deskonly{margin-left:auto}
 .toolbar{display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}
 .search{position:relative;flex:1;min-width:220px}
 .search input{width:100%;padding:11px 56px 11px var(--space-3);border-radius:var(--radius-md);
@@ -208,7 +212,7 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
   .search{min-width:0}
   .search input{height:46px;border-radius:var(--radius-pill);border-color:var(--bg-3);padding:0 var(--space-3)}
   .search kbd{display:none}
-  .toolbar select,.toolbar .primary,.range{display:none}
+  .toolbar select,.toolbar .primary,.range,.deskonly{display:none}
   .filterbtn{display:flex;align-items:center;justify-content:center;position:relative;
     width:46px;height:46px;flex:none;border:1px solid var(--bg-3);border-radius:var(--radius-pill);
     background:var(--bg-2);color:var(--text-white);cursor:pointer}
@@ -219,6 +223,12 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
   .chips{padding:10px var(--space-3);overflow-x:auto;flex-wrap:nowrap}
   .chips>*{flex:none}
   .queuehead{margin:10px var(--space-3);border-radius:var(--radius-md)}
+
+  /* Dozens of publications would make the sheet unusably tall, so this one
+     facet scrolls inside a fixed height instead of growing the sheet. */
+  .scrollfacet{max-height:172px;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    padding:2px;margin:-2px}
+  .scrollfacet .count{color:var(--text-grey);font-size:11px}
 
   /* filters become a bottom sheet */
   .panel-wrap{position:fixed;inset:0;z-index:5;background:rgba(10,10,14,.66);
@@ -348,6 +358,7 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
         &#9776;{% if active_filters %}<span class="filtern">{{ active_filters }}</span>{% endif %}
       </button>
       <span class="range">{{ page.total }} article{{ '' if page.total == 1 else 's' }}</span>
+      <button class="ghost deskonly" type="button" data-refresh>&#8635; Refresh</button>
     </form>
 
     <details class="panel-wrap" {% if q.min_duration_seconds or q.max_duration_seconds or q.downloaded %}open{% endif %}>
@@ -367,6 +378,16 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
               ('duration_asc','Shortest')] %}
             <a class="pill" aria-pressed="{{ 'true' if page.query.sort == value else 'false' }}"
                href="{{ link(sort=value, page=None) }}">{{ label }}</a>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="mobileonly">
+          <h3>Publications</h3>
+          <div class="pills scrollfacet">
+            {% for origin in facets.origins %}
+            <a class="pill" aria-pressed="{{ 'true' if q.origin_id == origin.id else 'false' }}"
+               href="{{ link(origin_id=(None if q.origin_id == origin.id else origin.id), page=None) }}">
+              {{ origin.name }} <span class="count">{{ origin.count }}</span></a>
             {% endfor %}
           </div>
         </div>
@@ -651,10 +672,11 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
   });
 
   // ---- refresh: the list is server-rendered, so a reload is the whole story
-  var refresh = document.querySelector('[data-refresh]');
-  if (refresh) refresh.addEventListener('click', function () {
-    refresh.disabled = true;
-    location.reload();
+  Array.prototype.forEach.call(document.querySelectorAll('[data-refresh]'), function (button) {
+    button.addEventListener('click', function () {
+      button.disabled = true;
+      location.reload();
+    });
   });
 
   // ---- filters: an inline panel on wide screens, a bottom sheet on mobile.

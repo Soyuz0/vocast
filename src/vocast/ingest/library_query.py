@@ -192,7 +192,7 @@ class LibraryQueryService:
             LibraryOrigin(id=row["origin_id"], name=row["origin_name"]) for row in rows
         ]
 
-    def facets(self, *, origin_limit: int = 40) -> LibraryFacets:
+    def facets(self) -> LibraryFacets:
         """Navigation counts: totals, queue size, statuses and publications."""
         with self._db.reading() as conn:
             total = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
@@ -222,9 +222,7 @@ class LibraryQueryService:
                     WHERE {_ORIGIN_EXPRESSION} != ''
                     GROUP BY UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION}))
                     ORDER BY n DESC, origin_name COLLATE NOCASE
-                    LIMIT ?
-                    """,
-                    (origin_limit,),
+                    """
                 )
             ]
         return LibraryFacets(
