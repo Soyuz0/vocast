@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Library | Vocast</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #e8e1cf;
+      --muted: #9b927e;
+      --ground: #11100c;
+      --panel: #1b1913;
+      --line: #393428;
+      --accent: #d29a3b;
+      --ready: #6bb77b;
+      --danger: #df7770;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--ground);
+      color: var(--ink);
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+    a { color: var(--accent); }
+    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    header, main { width: min(72rem, calc(100% - 2rem)); margin-inline: auto; }
+    header { padding: 2.5rem 0 1rem; border-bottom: 1px solid var(--line); }
+    h1 { margin: 0; font: 2.2rem/1.1 Georgia, serif; letter-spacing: .02em; }
+    header p { margin: .5rem 0 0; color: var(--muted); }
+    .feed-link { display: inline-block; margin-top: .7rem; }
+    details { margin: 1rem 0; border: 1px solid var(--line); background: var(--panel); }
+    summary { cursor: pointer; padding: .9rem 1rem; font-weight: 700; }
+    form { display: grid; gap: .8rem; padding: 0 1rem 1rem; }
+    .field { display: grid; gap: .3rem; min-width: 0; }
+    label { color: var(--muted); font-size: .78rem; font-weight: 700; text-transform: uppercase; }
+    input, select, button, .button {
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      background: #0e0d0a;
+      color: var(--ink);
+      padding: .6rem .7rem;
+      font: inherit;
+    }
+    button, .button { cursor: pointer; text-decoration: none; text-align: center; }
+    button:hover, .button:hover { border-color: var(--accent); }
+    .primary { color: var(--accent); }
+    .actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; }
+    .summary { color: var(--muted); margin: 1.25rem 0 .7rem; }
+    .cards { display: grid; gap: .8rem; padding: 0; list-style: none; }
+    .card {
+      display: grid;
+      gap: .7rem;
+      min-width: 0;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--muted);
+      background: var(--panel);
+    }
+    .card.ready { border-left-color: var(--ready); }
+    .card.failed { border-left-color: var(--danger); }
+    h2 { margin: 0; font: 1.25rem/1.3 Georgia, serif; overflow-wrap: anywhere; }
+    .byline, .meta { color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
+    .meta { display: flex; flex-wrap: wrap; gap: .35rem .8rem; }
+    .badges { display: flex; flex-wrap: wrap; gap: .4rem; }
+    .badge { border: 1px solid var(--line); padding: .12rem .45rem; font-size: .72rem; text-transform: uppercase; }
+    .badge.queued { border-color: var(--accent); color: var(--accent); }
+    .card-actions { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
+    .card-actions button, .card-actions .button { flex: 1 1 10rem; }
+    .message { color: var(--muted); font-size: .82rem; }
+    .message.error { color: var(--danger); }
+    .empty { margin: 2rem 0; padding: 2rem; text-align: center; border: 1px dashed var(--line); }
+    nav { display: flex; justify-content: center; align-items: center; gap: .8rem; margin: 1.5rem 0 3rem; }
+    nav .button[aria-disabled="true"] { opacity: .4; pointer-events: none; }
+    .auth-note { color: var(--muted); font-size: .85rem; }
+    @media (min-width: 42rem) {
+      form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .wide, .actions { grid-column: 1 / -1; }
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (min-width: 68rem) {
+      form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Vocast Library</h1>
+    <p>Find an article here, then keep your podcast app focused with Listen Later.</p>
+    <a class="feed-link" href="{{ base_path }}/feeds/listen-later.xml">Subscribe to the Listen Later feed</a>
+    {% if feed_token_required %}<span class="auth-note"> (append your configured feed token to this private feed URL)</span>{% endif %}
+  </header>
+  <main data-base-path="{{ base_path }}">
+    <details{% if current_query %} open{% endif %}>
+      <summary>Search and filters</summary>
+      <form method="get" action="{{ base_path }}/library">
+        <div class="field wide">
+          <label for="search">Search title, publication, source, or author</label>
+          <input id="search" name="search" value="{{ page.query.search or '' }}" type="search">
+        </div>
+        <div class="field">
+          <label for="origin_id">Publication</label>
+          <select id="origin_id" name="origin_id">
+            <option value="">All publications</option>
+            {% for origin in origins %}
+              <option value="{{ origin.id }}"{% if page.query.origin_id == origin.id %} selected{% endif %}>{{ origin.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="source_id">Vocast source</label>
+          <select id="source_id" name="source_id">
+            <option value="">All sources</option>
+            {% for source in sources %}
+              <option value="{{ source.id }}"{% if page.query.source_id == source.id %} selected{% endif %}>{{ source.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="status">Status</label>
+          <select id="status" name="status">
+            <option value="">Any status</option>
+            {% for status in statuses %}
+              <option value="{{ status.value }}"{% if page.query.status == status %} selected{% endif %}>{{ status.value }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="sort">Sort</label>
+          <select id="sort" name="sort">
+            {% for value, label in [('published_desc','Newest published'),('published_asc','Oldest published'),('title_asc','Title A-Z'),('title_desc','Title Z-A'),('duration_desc','Longest'),('duration_asc','Shortest')] %}
+              <option value="{{ value }}"{% if page.query.sort == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% for name, label, value in [('queued','Listen Later',page.query.queued),('downloaded','Downloaded',page.query.downloaded)] %}
+        <div class="field">
+          <label for="{{ name }}">{{ label }}</label>
+          <select id="{{ name }}" name="{{ name }}">
+            <option value="">Either</option>
+            <option value="yes"{% if value is sameas true %} selected{% endif %}>Yes</option>
+            <option value="no"{% if value is sameas false %} selected{% endif %}>No</option>
+          </select>
+        </div>
+        {% endfor %}
+        <div class="field">
+          <label for="published_after">Published after</label>
+          <input id="published_after" name="published_after" type="date" value="{{ page.query.published_after.strftime('%Y-%m-%d') if page.query.published_after else '' }}">
+        </div>
+        <div class="field">
+          <label for="published_before">Published before</label>
+          <input id="published_before" name="published_before" type="date" value="{{ page.query.published_before.strftime('%Y-%m-%d') if page.query.published_before else '' }}">
+        </div>
+        <div class="field">
+          <label for="min_duration_seconds">Minimum duration (seconds)</label>
+          <input id="min_duration_seconds" name="min_duration_seconds" min="0" type="number" value="{{ page.query.min_duration_seconds if page.query.min_duration_seconds is not none else '' }}">
+        </div>
+        <div class="field">
+          <label for="max_duration_seconds">Maximum duration (seconds)</label>
+          <input id="max_duration_seconds" name="max_duration_seconds" min="0" type="number" value="{{ page.query.max_duration_seconds if page.query.max_duration_seconds is not none else '' }}">
+        </div>
+        <div class="actions">
+          <button class="primary" type="submit">Apply filters</button>
+          <a class="button" href="{{ base_path }}/library">Clear</a>
+        </div>
+      </form>
+    </details>
+
+    {% if admin_token_required %}
+      <p class="auth-note">Listen Later changes require the admin token. It is requested on first use and kept only in this browser tab.</p>
+    {% endif %}
+    <p class="summary">{{ page.total }} matching article{{ '' if page.total == 1 else 's' }}</p>
+
+    {% if page.items %}
+    <ul class="cards" aria-label="Library articles">
+      {% for item in page.items %}
+      <li class="card {{ item.status.value }}" data-card-entry="{{ item.entry_id }}">
+        <h2><a href="{{ item.article_url }}" rel="noopener noreferrer">{{ item.title }}</a></h2>
+        <div class="byline">
+          {{ item.origin_name }}{% if item.source_name != item.origin_name %} via {{ item.source_name }}{% endif %}{% if item.author %} by {{ item.author }}{% endif %}
+        </div>
+        <div class="meta">
+          {% if item.published_at %}<span>Published {{ item.published_at.strftime('%Y-%m-%d') }}</span>{% endif %}
+          {% if item.duration_seconds is not none %}<span>{{ (item.duration_seconds / 60)|round(1) }} min</span>{% endif %}
+          <span>{{ 'Downloaded' if item.downloaded_at else 'Not downloaded' }}</span>
+        </div>
+        <div class="badges">
+          <span class="badge">{{ item.status.value }}</span>
+          {% if item.queued %}<span class="badge queued" data-queue-badge>Listen Later</span>{% endif %}
+        </div>
+        <div class="card-actions">
+          {% if item.status.value == 'ready' and item.episode_id %}
+            <a class="button" href="{{ base_path }}/audio/{{ item.episode_id }}.mp3">Open audio{% if feed_token_required %} (feed token required){% endif %}</a>
+          {% endif %}
+          <button class="primary" type="button" data-queue-button data-entry-id="{{ item.entry_id }}" data-queued="{{ 'true' if item.queued else 'false' }}" aria-pressed="{{ 'true' if item.queued else 'false' }}">
+            {{ 'Remove from Listen Later' if item.queued else 'Add to Listen Later' }}
+          </button>
+          <span class="message" data-message aria-live="polite"></span>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <section class="empty">
+        <h2>No matching articles</h2>
+        {% if current_query %}<p>Clear or broaden the filters to see more of the library.</p>{% else %}<p>Add a source and let Vocast discover articles; they will appear here in every processing state.</p>{% endif %}
+      </section>
+    {% endif %}
+
+    {% if page.pages > 1 %}
+    <nav aria-label="Pagination">
+      {% set separator = '&' if pagination_query else '' %}
+      <a class="button"{% if page.query.page > 1 %} href="{{ base_path }}/library?{{ pagination_query }}{{ separator }}page={{ page.query.page - 1 }}"{% else %} aria-disabled="true"{% endif %}>Previous</a>
+      <span>Page {{ page.query.page }} of {{ page.pages }}</span>
+      <a class="button"{% if page.query.page < page.pages %} href="{{ base_path }}/library?{{ pagination_query }}{{ separator }}page={{ page.query.page + 1 }}"{% else %} aria-disabled="true"{% endif %}>Next</a>
+    </nav>
+    {% endif %}
+  </main>
+  <script>
+    (function () {
+      var key = 'vocast_admin_token';
+      function token() { try { return sessionStorage.getItem(key); } catch (_) { return null; } }
+      function store(value) { try { sessionStorage.setItem(key, value); } catch (_) {} }
+      async function send(button, method, bearer) {
+        var headers = { 'Content-Type': 'application/json' };
+        if (bearer) headers.Authorization = 'Bearer ' + bearer;
+        var basePath = document.querySelector('main').dataset.basePath;
+        return fetch(basePath + '/api/playlists/listen-later/entries/' + button.dataset.entryId, { method: method, headers: headers });
+      }
+      document.addEventListener('click', async function (event) {
+        var button = event.target.closest('[data-queue-button]');
+        if (!button) return;
+        var queued = button.dataset.queued === 'true';
+        var message = button.parentElement.querySelector('[data-message]');
+        button.disabled = true;
+        message.className = 'message';
+        message.textContent = '';
+        try {
+          var response = await send(button, queued ? 'DELETE' : 'POST', token());
+          if (response.status === 401) {
+            var supplied = window.prompt('Vocast admin token');
+            if (!supplied) throw new Error('Admin token required');
+            store(supplied);
+            response = await send(button, queued ? 'DELETE' : 'POST', supplied);
+          }
+          if (!response.ok) throw new Error(response.status === 404 ? 'Article no longer exists' : 'Could not update Listen Later');
+          var next = !queued;
+          button.dataset.queued = next ? 'true' : 'false';
+          button.setAttribute('aria-pressed', next ? 'true' : 'false');
+          button.textContent = next ? 'Remove from Listen Later' : 'Add to Listen Later';
+          var card = button.closest('[data-card-entry]');
+          var badge = card.querySelector('[data-queue-badge]');
+          if (next && !badge) {
+            badge = document.createElement('span');
+            badge.className = 'badge queued';
+            badge.dataset.queueBadge = '';
+            badge.textContent = 'Listen Later';
+            card.querySelector('.badges').appendChild(badge);
+          } else if (!next && badge) badge.remove();
+          message.textContent = next ? 'Added' : 'Removed';
+        } catch (error) {
+          message.className = 'message error';
+          message.textContent = error.message || 'Request failed';
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }());
+  </script>
+</body>
+</html>

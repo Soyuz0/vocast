@@ -131,6 +131,53 @@ def test_head_request_on_the_feed_is_allowed(client: TestClient):
     assert client.head("/feeds/all.xml").status_code == 200
 
 
+def test_listen_later_feed_contains_only_queued_ready_entries(
+    client: TestClient, context: AppContext
+):
+    source = context.sources.add(
+        name="Tech", kind="rss", url="https://example.com/listen-later.xml"
+    )
+    entry = context.entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="queued",
+            title="Selected article",
+            article_url="https://example.com/selected",
+            published_at=utcnow(),
+        )
+    )
+    context.entries.mark_ready(
+        entry.id, episode_id="selected-episode", duration_seconds=60, audio_bytes=8
+    )
+    context.playlists.add_entry("listen-later", entry.id)
+
+    response = client.get("/feeds/listen-later.xml")
+
+    assert response.status_code == 200
+    assert "selected-episode" in response.text
+    assert "Vocast - Listen Later" in response.text
+
+
+def test_existing_feed_routes_are_unchanged_by_listen_later(
+    client: TestClient, context: AppContext
+):
+    _make_episode(context.config.storage.library_path, "existing-episode", "Existing")
+    source_id = _add_ready_entry(
+        context, source_name="Existing", episode_id="existing-episode"
+    )
+    before = {
+        path: client.get(path).text
+        for path in ("/feed.xml", "/feeds/all.xml", f"/feeds/source/{source_id}.xml")
+    }
+    [entry] = context.entries.all()
+    context.playlists.add_entry("listen-later", entry.id)
+
+    assert {
+        path: client.get(path).text
+        for path in ("/feed.xml", "/feeds/all.xml", f"/feeds/source/{source_id}.xml")
+    } == before
+
+
 # --- health ----------------------------------------------------------------
 
 
@@ -412,14 +459,26 @@ def tokened_client(context: AppContext) -> TestClient:
 
 
 @pytest.mark.parametrize(
-    "path", ["/feed.xml", "/feeds/all.xml", "/audio/20260604T120000Z_a_aaa1.mp3"]
+    "path",
+    [
+        "/feed.xml",
+        "/feeds/all.xml",
+        "/feeds/listen-later.xml",
+        "/audio/20260604T120000Z_a_aaa1.mp3",
+    ],
 )
 def test_feed_and_audio_require_the_token(tokened_client: TestClient, path: str):
     assert tokened_client.get(path).status_code == 401
 
 
 @pytest.mark.parametrize(
-    "path", ["/feed.xml", "/feeds/all.xml", "/audio/20260604T120000Z_a_aaa1.mp3"]
+    "path",
+    [
+        "/feed.xml",
+        "/feeds/all.xml",
+        "/feeds/listen-later.xml",
+        "/audio/20260604T120000Z_a_aaa1.mp3",
+    ],
 )
 def test_correct_feed_token_is_accepted(tokened_client: TestClient, path: str):
     assert tokened_client.get(f"{path}?token=feed-s3cret").status_code == 200

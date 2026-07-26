@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -114,6 +114,37 @@ _SCHEMA_V7 = """
 ALTER TABLE entries ADD COLUMN feed_content TEXT;
 """
 
+# Generic playlists keep the built-in queue extensible without adding user or
+# sharing concepts. The seed is part of the migration so every database has the
+# system playlist before repositories or routes can use it.
+_SCHEMA_V8 = """
+CREATE TABLE playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    is_system INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE playlist_entries (
+    playlist_id INTEGER NOT NULL,
+    entry_id INTEGER NOT NULL,
+    position INTEGER,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (playlist_id, entry_id),
+    FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_playlist_entries_order
+ON playlist_entries(playlist_id, position, added_at);
+
+INSERT INTO playlists (slug, name, is_system, created_at, updated_at)
+VALUES ('listen-later', 'Listen Later', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+ON CONFLICT(slug) DO NOTHING;
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
@@ -122,6 +153,7 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (5, _SCHEMA_V5),
     (6, _SCHEMA_V6),
     (7, _SCHEMA_V7),
+    (8, _SCHEMA_V8),
 ]
 
 
@@ -145,6 +177,9 @@ class Database:
                     isolation_level=None,
                 )
                 conn.row_factory = sqlite3.Row
+                conn.create_function(
+                    "unicode_casefold", 1, _unicode_casefold, deterministic=True
+                )
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
                 conn.execute("PRAGMA foreign_keys=ON")
@@ -214,3 +249,7 @@ def open_database(path: Path | str) -> Database:
     db = Database(path)
     db.migrate()
     return db
+
+
+def _unicode_casefold(value: object | None) -> str:
+    return str(value).casefold() if value is not None else ""

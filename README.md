@@ -37,6 +37,15 @@ Both modes share the same library, the same feed, and the same pipeline, so
 `vocast add` and an auto-ingested article produce exactly the same kind of
 episode. If you only want the manual workflow, nothing below changes for you.
 
+For a large ingested library, discovery and playback can be separated:
+
+```
+search and filter /library
+        -> add selected articles to Listen Later
+        -> subscribe to /feeds/listen-later.xml
+        -> listen in a normal podcast app
+```
+
 Jump to [Running as a service](#running-as-a-service).
 
 ## Requirements
@@ -426,6 +435,7 @@ enclosures use the public host too.
 | `/feed.xml` | Everything. Unchanged from earlier vocast versions. |
 | `/feeds/all.xml` | Everything. Identical to `/feed.xml`. |
 | `/feeds/source/<id>.xml` | One source only, as its own show. |
+| `/feeds/listen-later.xml` | Only ready episodes selected in the web library. |
 
 Feeds carry the newest `server.feed_max_items` episodes (default 300); set it to
 `unlimited` for no cap. Rendering costs nothing per episode -- duration and size
@@ -435,6 +445,52 @@ recorded still read their metadata from disk, which on a network share costs
 around 17 ms each.
 
 Use `vocast source list` to get source ids.
+
+## Searchable library and Listen Later
+
+Open `http://<vocast-host>:<port>/library` while the ingestion service is
+running. This page is the discovery interface: it shows pending, processing,
+ready, failed, ignored, and expired articles without turning the podcast feed
+into a browsing interface. It uses server-rendered HTML and remains usable on a
+phone; search, filters, and pagination do not require JavaScript.
+
+Search matches article title, publication, Vocast source, and author without
+regard to case. Filters cover publication, source, processing status, Listen
+Later state, downloaded state, publication date, and duration. Results can be
+sorted by publication date, title, or duration. FreshRSS API sources can contain
+many publications; Vocast groups those by the persisted publication name,
+normalized for filtering. The upstream stream/feed identifier is not currently
+stored, so a renamed publication can appear as a new filter value.
+
+Use **Add to Listen Later** on a card, then subscribe your podcast app to:
+
+```
+https://podcast.example.com/feeds/listen-later.xml
+```
+
+Use **Remove from Listen Later** to withdraw it. Pending or failed articles may
+be selected, but they stay out of the podcast feed until their status is
+`ready`. Explicit playlist positions are listed first; otherwise the feed is
+newest-added first, with stable entry ids as tie-breakers. Each episode keeps
+its original article publication date and its existing library id as the
+podcast GUID.
+
+When `VOCAST_ADMIN_TOKEN` is configured, Listen Later changes require that same
+bearer token. The page asks for it on first use and stores it only in the current
+browser tab's session storage; Vocast never writes the token into the HTML or a
+URL. Direct `/library` is intentionally tokenless for access through a trusted
+tailnet address; do not expose that route directly to the internet. The bundled
+Funnel script maps public `/library` to the protected internal `/public/library`
+route instead. Open the public page as `/library?token=...`; Vocast validates the
+feed token, stores it in an HttpOnly same-site session cookie, and redirects to
+a clean `/library` URL so filters and pagination do not carry the secret. The
+Listen Later feed follows the same feed-token rule as existing feeds.
+
+Removing an episode from Listen Later removes it from future feed responses but
+cannot delete a copy that a podcast app already downloaded. A download request
+is the only consumption signal Vocast receives; ordinary podcast apps do not
+report playback completion, so Vocast cannot detect that an episode was truly
+heard and does not remove it automatically.
 
 > [!NOTE]
 > Many podcast apps fetch feeds through **their own servers**, not your phone.
@@ -697,6 +753,8 @@ DELETE /api/sources/{id}
 POST   /api/sources/{id}/poll
 GET    /api/entries?status=failed&source_id=1&limit=100
 POST   /api/entries/{id}/retry
+POST   /api/playlists/listen-later/entries/{id}
+DELETE /api/playlists/listen-later/entries/{id}
 ```
 
 `/api/health` reports application and database status, whether the worker and
@@ -771,6 +829,14 @@ tar czf /backup/library.tar.gz -C /data library
 
 The model cache is disposable; it re-downloads.
 
+On first startup with this version, Vocast applies an additive database
+migration that creates `playlists` and `playlist_entries`, then creates the
+built-in `listen-later` system playlist. Existing sources and entries are not
+rewritten or removed, and reopening an already migrated database is a no-op.
+Back up the SQLite database and media library together before upgrading, as for
+any stateful service. The migration runs when Vocast opens the database; there
+is no separate production migration command.
+
 If you lose the database but keep the library, existing episodes still appear in
 `/feed.xml` (the library is what the feed is built from), but articles will be
 rediscovered and narrated again, since the dedup records are gone.
@@ -827,7 +893,8 @@ executed.
   own copy of the TTS model.
 - **No played/read synchronization.** Marking an episode played in a podcast app
   does not feed back to FreshRSS, by design.
-- **No web UI.** CLI and JSON API only.
+- **Single-user library.** The web library has one built-in Listen Later queue;
+  there are no user accounts, shared queues, or playback-completion sync.
 - **Python 3.10–3.12**, because Kokoro does not support 3.13 yet.
 
 ## Troubleshooting
