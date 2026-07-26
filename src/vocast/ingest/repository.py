@@ -52,6 +52,31 @@ class PublishedEpisode:
     summary: str | None = None
 
 
+@dataclass(frozen=True)
+class Playlist:
+    id: int
+    slug: str
+    name: str
+    is_system: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True)
+class PlaylistEntry:
+    playlist_id: int
+    entry_id: int
+    position: int | None
+    added_at: datetime | None
+
+
+@dataclass(frozen=True)
+class PlaylistEpisode:
+    episode: PublishedEpisode
+    position: int | None
+    added_at: datetime | None
+
+
 class SourceRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
@@ -721,6 +746,172 @@ class EntryRepository:
                 (EntryStatus.EXPIRED.value, to_iso(utcnow()), entry_id),
             )
         return cur.rowcount > 0
+
+
+class PlaylistRepository:
+    """Persistent playlist membership and ordering."""
+
+    LISTEN_LATER = "listen-later"
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def all(self) -> list[Playlist]:
+        with self._db.reading() as conn:
+            rows = conn.execute(
+                "SELECT id, slug, name, is_system, created_at, updated_at "
+                "FROM playlists ORDER BY id"
+            ).fetchall()
+        return [self._playlist_from_row(row) for row in rows]
+
+    def get(self, slug: str) -> Playlist | None:
+        with self._db.reading() as conn:
+            row = conn.execute(
+                "SELECT id, slug, name, is_system, created_at, updated_at "
+                "FROM playlists WHERE slug = ?",
+                (slug,),
+            ).fetchone()
+        return self._playlist_from_row(row) if row else None
+
+    def add_entry(
+        self,
+        slug: str,
+        entry_id: int,
+        *,
+        position: int | None = None,
+        added_at: datetime | None = None,
+    ) -> bool:
+        """Add membership without changing an existing item's queue time."""
+        now = to_iso(added_at or utcnow())
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO playlist_entries (playlist_id, entry_id, position, added_at)
+                SELECT id, ?, ?, ? FROM playlists WHERE slug = ?
+                ON CONFLICT(playlist_id, entry_id) DO NOTHING
+                """,
+                (entry_id, position, now, slug),
+            )
+            if cur.rowcount:
+                conn.execute(
+                    "UPDATE playlists SET updated_at = ? WHERE slug = ?", (now, slug)
+                )
+        return cur.rowcount > 0
+
+    def remove_entry(self, slug: str, entry_id: int) -> bool:
+        now = to_iso(utcnow())
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                """
+                DELETE FROM playlist_entries
+                WHERE playlist_id = (SELECT id FROM playlists WHERE slug = ?)
+                  AND entry_id = ?
+                """,
+                (slug, entry_id),
+            )
+            if cur.rowcount:
+                conn.execute(
+                    "UPDATE playlists SET updated_at = ? WHERE slug = ?", (now, slug)
+                )
+        return cur.rowcount > 0
+
+    def contains(self, slug: str, entry_id: int) -> bool:
+        with self._db.reading() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM playlist_entries pe
+                JOIN playlists p ON p.id = pe.playlist_id
+                WHERE p.slug = ? AND pe.entry_id = ?
+                """,
+                (slug, entry_id),
+            ).fetchone()
+        return row is not None
+
+    def entries(self, slug: str) -> list[PlaylistEntry]:
+        """Return explicit positions first, then newest-added entries."""
+        with self._db.reading() as conn:
+            rows = conn.execute(
+                """
+                SELECT pe.playlist_id, pe.entry_id, pe.position, pe.added_at
+                FROM playlist_entries pe
+                JOIN playlists p ON p.id = pe.playlist_id
+                WHERE p.slug = ?
+                ORDER BY pe.position IS NULL, pe.position ASC,
+                         pe.added_at DESC, pe.entry_id DESC
+                """,
+                (slug,),
+            ).fetchall()
+        return [
+            PlaylistEntry(
+                playlist_id=row["playlist_id"],
+                entry_id=row["entry_id"],
+                position=row["position"],
+                added_at=from_iso(row["added_at"]),
+            )
+            for row in rows
+        ]
+
+    def queued_entry_ids(self, slug: str = LISTEN_LATER) -> set[int]:
+        return {item.entry_id for item in self.entries(slug)}
+
+    def published_episodes(
+        self, slug: str, *, limit: int | None = None
+    ) -> list[PlaylistEpisode]:
+        """Ready playlist items in queue order, with feed provenance."""
+        with self._db.reading() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT e.vocast_episode_id, e.id AS entry_id, e.source_id,
+                       s.name AS source_name, e.article_url, e.title, e.author,
+                       e.published_at, e.origin_name, e.duration_seconds,
+                       e.audio_bytes, pe.position, pe.added_at
+                FROM playlist_entries pe
+                JOIN playlists p ON p.id = pe.playlist_id
+                JOIN entries e ON e.id = pe.entry_id
+                JOIN sources s ON s.id = e.source_id
+                WHERE p.slug = ? AND e.status = ?
+                  AND e.vocast_episode_id IS NOT NULL
+                ORDER BY pe.position IS NULL, pe.position ASC,
+                         pe.added_at DESC, pe.entry_id DESC
+                {"LIMIT ?" if limit is not None else ""}
+                """,
+                (
+                    (slug, EntryStatus.READY.value, limit)
+                    if limit is not None
+                    else (slug, EntryStatus.READY.value)
+                ),
+            ).fetchall()
+        return [
+            PlaylistEpisode(
+                episode=PublishedEpisode(
+                    episode_id=row["vocast_episode_id"],
+                    entry_id=row["entry_id"],
+                    source_id=row["source_id"],
+                    source_name=row["source_name"],
+                    article_url=row["article_url"],
+                    title=row["title"],
+                    author=row["author"],
+                    published_at=from_iso(row["published_at"]),
+                    origin_name=row["origin_name"],
+                    duration_seconds=row["duration_seconds"],
+                    audio_bytes=row["audio_bytes"],
+                ),
+                position=row["position"],
+                added_at=from_iso(row["added_at"]),
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def _playlist_from_row(row: sqlite3.Row) -> Playlist:
+        return Playlist(
+            id=row["id"],
+            slug=row["slug"],
+            name=row["name"],
+            is_system=bool(row["is_system"]),
+            created_at=from_iso(row["created_at"]),
+            updated_at=from_iso(row["updated_at"]),
+        )
 
 
 def _is_due(source: Source, now: datetime) -> bool:

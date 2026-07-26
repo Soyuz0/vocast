@@ -19,7 +19,7 @@ from email.utils import format_datetime
 from xml.sax.saxutils import escape, quoteattr
 
 from ..library import LibraryEntry, get_entry, list_entries
-from .repository import EntryRepository, PublishedEpisode
+from .repository import EntryRepository, PlaylistRepository, PublishedEpisode
 
 AUDIO_MIME_TYPE = "audio/mpeg"
 
@@ -117,6 +117,29 @@ def collect_episodes(
     episodes.sort(key=lambda e: (e.published_at, e.episode_id), reverse=True)
     if max_items is not None:
         return episodes[:max_items]
+    return episodes
+
+
+def collect_playlist_episodes(
+    playlists: PlaylistRepository,
+    *,
+    slug: str,
+    base_url: str,
+    audio_base_url: str | None = None,
+    token: str | None = None,
+    max_items: int | None = None,
+) -> list[FeedEpisode]:
+    """Assemble ready playlist items without changing their queue order."""
+    audio_base = audio_base_url or base_url
+    episodes: list[FeedEpisode] = []
+    for item in playlists.published_episodes(slug, limit=max_items):
+        details = item.episode
+        if details.duration_seconds is not None and details.audio_bytes is not None:
+            episodes.append(_from_details(details, audio_base, token=token))
+            continue
+        entry = get_entry(details.episode_id)
+        if entry is not None:
+            episodes.append(_to_feed_episode(entry, details, audio_base, token=token))
     return episodes
 
 

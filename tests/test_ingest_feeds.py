@@ -13,9 +13,18 @@ import pytest
 from vocast import library
 from vocast.ingest import feeds as feeds_module
 from vocast.ingest.db import Database, open_database
-from vocast.ingest.feeds import FeedChannel, build_podcast_rss, collect_episodes
-from vocast.ingest.models import FeedEntry
-from vocast.ingest.repository import EntryRepository, SourceRepository
+from vocast.ingest.feeds import (
+    FeedChannel,
+    build_podcast_rss,
+    collect_episodes,
+    collect_playlist_episodes,
+)
+from vocast.ingest.models import EntryStatus, FeedEntry
+from vocast.ingest.repository import (
+    EntryRepository,
+    PlaylistRepository,
+    SourceRepository,
+)
 from vocast.ingest.timeutils import utcnow
 
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -819,3 +828,165 @@ def test_uncapped_feed_lists_everything(
         )
 
     assert len(collect_episodes(entries, base_url=BASE, max_items=None)) == 12
+
+
+# --- Listen Later ----------------------------------------------------------
+
+
+def test_listen_later_contains_only_ready_queued_entries(
+    lib: Path, sources: SourceRepository, entries: EntryRepository, db: Database
+):
+    source = sources.add(name="Tech", kind="rss", url="https://example.com/ll.xml")
+    ready = entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="ready",
+            title="Ready & queued",
+            article_url="https://example.com/ready?a=1&b=2",
+            published_at=utcnow(),
+            origin_name="Tech <Weekly>",
+        )
+    )
+    pending = entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="pending",
+            title="Pending",
+            article_url="https://example.com/pending",
+            published_at=utcnow(),
+        )
+    )
+    not_queued = entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="other",
+            title="Not queued",
+            article_url="https://example.com/other",
+            published_at=utcnow(),
+        )
+    )
+    for entry, episode_id in ((ready, "episode-ready"), (not_queued, "episode-other")):
+        entries.mark_ready(
+            entry.id, episode_id=episode_id, duration_seconds=61, audio_bytes=1234
+        )
+    playlists = PlaylistRepository(db)
+    playlists.add_entry("listen-later", ready.id)
+    playlists.add_entry("listen-later", pending.id)
+
+    xml = build_podcast_rss(
+        FeedChannel(title="Listen Later", link=BASE, description="d"),
+        collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE),
+    )
+    [item] = _items(xml)
+
+    assert item.find("guid").text == "episode-ready"
+    assert item.find("title").text == "Tech <Weekly> - Ready & queued"
+    assert item.find("enclosure").attrib == {
+        "url": f"{BASE}/audio/episode-ready.mp3",
+        "length": "1234",
+        "type": "audio/mpeg",
+    }
+    assert item.find(f"{{{ITUNES_NS}}}duration").text == "61"
+    assert item.find("link").text == "https://example.com/ready?a=1&b=2"
+
+
+def test_listen_later_removal_and_status_changes_are_immediate(
+    sources: SourceRepository, entries: EntryRepository, db: Database
+):
+    source = sources.add(name="Tech", kind="rss", url="https://example.com/queue.xml")
+    entry = entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="queued",
+            title="Queued",
+            article_url="https://example.com/queued",
+            published_at=utcnow(),
+        )
+    )
+    entries.mark_ready(
+        entry.id, episode_id="stable-guid", duration_seconds=1, audio_bytes=1
+    )
+    playlists = PlaylistRepository(db)
+    playlists.add_entry("listen-later", entry.id)
+
+    assert (
+        collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE)[
+            0
+        ].episode_id
+        == "stable-guid"
+    )
+    entries.set_status(entry.id, EntryStatus.FAILED)
+    assert (
+        collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE) == []
+    )
+    entries.set_status(entry.id, EntryStatus.READY)
+    playlists.remove_entry("listen-later", entry.id)
+    assert (
+        collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE) == []
+    )
+
+
+def test_listen_later_order_is_deterministic_and_uses_playlist_order(
+    sources: SourceRepository, entries: EntryRepository, db: Database
+):
+    source = sources.add(name="Tech", kind="rss", url="https://example.com/order.xml")
+    playlists = PlaylistRepository(db)
+    now = utcnow()
+    queued = []
+    for index in range(3):
+        entry = entries.insert_if_new(
+            FeedEntry(
+                source_id=source.id,
+                external_guid=str(index),
+                title=str(index),
+                article_url=f"https://example.com/{index}",
+                published_at=now - timedelta(days=index),
+            )
+        )
+        entries.mark_ready(
+            entry.id, episode_id=f"episode-{index}", duration_seconds=1, audio_bytes=1
+        )
+        queued.append(entry)
+    playlists.add_entry("listen-later", queued[0].id, added_at=now)
+    playlists.add_entry(
+        "listen-later", queued[1].id, added_at=now + timedelta(minutes=1)
+    )
+    playlists.add_entry("listen-later", queued[2].id, position=1, added_at=now)
+
+    first = collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE)
+    second = collect_playlist_episodes(playlists, slug="listen-later", base_url=BASE)
+
+    assert [item.episode_id for item in first] == [
+        "episode-2",
+        "episode-1",
+        "episode-0",
+    ]
+    assert first == second
+
+
+def test_listen_later_respects_the_feed_item_cap(
+    sources: SourceRepository, entries: EntryRepository, db: Database
+):
+    source = sources.add(name="Tech", kind="rss", url="https://example.com/cap.xml")
+    playlists = PlaylistRepository(db)
+    for index in range(3):
+        entry = entries.insert_if_new(
+            FeedEntry(
+                source_id=source.id,
+                external_guid=f"cap-{index}",
+                title=f"Cap {index}",
+                article_url=f"https://example.com/cap/{index}",
+                published_at=utcnow(),
+            )
+        )
+        entries.mark_ready(
+            entry.id, episode_id=f"cap-{index}", duration_seconds=1, audio_bytes=1
+        )
+        playlists.add_entry("listen-later", entry.id)
+
+    episodes = collect_playlist_episodes(
+        playlists, slug="listen-later", base_url=BASE, max_items=2
+    )
+
+    assert len(episodes) == 2
+    assert [episode.episode_id for episode in episodes] == ["cap-2", "cap-1"]

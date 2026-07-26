@@ -18,6 +18,7 @@ from .repository import (
     ConsumptionRepository,
     DuplicateSourceError,
     EntryRepository,
+    PlaylistRepository,
     SettingsRepository,
     SourceRepository,
 )
@@ -33,6 +34,7 @@ class AppContext:
     entries: EntryRepository
     settings: SettingsRepository
     consumption: ConsumptionRepository
+    playlists: PlaylistRepository
 
     @classmethod
     def create(cls, config: Config | None = None) -> AppContext:
@@ -47,6 +49,7 @@ class AppContext:
             entries=EntryRepository(db),
             settings=SettingsRepository(db),
             consumption=ConsumptionRepository(db),
+            playlists=PlaylistRepository(db),
         )
 
     def fetch_policy(self) -> FetchPolicy:

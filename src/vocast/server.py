@@ -40,6 +40,8 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         lines = [f"vocast — {n} article{suffix}", "feed: /feed.xml"]
         if state is not None:
             lines.append("all sources: /feeds/all.xml")
+            lines.append("library: /library")
+            lines.append("listen later: /feeds/listen-later.xml")
             lines.append("health: /api/health")
         return PlainTextResponse("\n".join(lines) + "\n")
 
@@ -84,6 +86,22 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
 
     if state is not None:
         from .ingest.api import create_router
+        from .ingest.public_guard import public_access_denied
+
+        @app.middleware("http")
+        async def require_token_from_the_internet(request: Request, call_next):
+            """Gate everything published through Tailscale Funnel.
+
+            Applied here rather than per route so a route added later is covered
+            by default. Funnel exposes every path, so the safe default is that
+            reaching the service from the internet requires the token.
+            """
+            denied = public_access_denied(
+                state.context.config.server.feed_token or "", request
+            )
+            if denied is not None:
+                return denied
+            return await call_next(request)
 
         app.include_router(create_router(state))
 

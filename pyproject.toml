@@ -25,6 +25,7 @@ dependencies = [
     "pydub",
     "imageio-ffmpeg",
     "fastapi",
+    "Jinja2>=3.1",
     "uvicorn",
     "trafilatura",
     "feedparser>=6.0",

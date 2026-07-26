@@ -7,6 +7,7 @@ Mounted onto the existing vocast FastAPI app, so `/feed.xml` and
 from __future__ import annotations
 
 import secrets
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -17,7 +18,13 @@ from pydantic import BaseModel, Field
 
 from .adapters import supported_kinds
 from .context import AppContext
-from .feeds import FeedChannel, build_podcast_rss, collect_episodes, with_token
+from .feeds import (
+    FeedChannel,
+    build_podcast_rss,
+    collect_episodes,
+    collect_playlist_episodes,
+    with_token,
+)
 from .freshrss_writer import FreshRSSWriter, mark_read_in_background
 from .logs import get_logger, kv
 from .models import EntryStatus, SourceKind
@@ -129,6 +136,9 @@ def create_router(state: ServiceState) -> APIRouter:
     _register_feeds(router, state)
     _register_health(router, state)
     _register_admin(router, state)
+    from .library_web import register_library
+
+    register_library(router, state)
     return router
 
 
@@ -152,6 +162,29 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
         return _render_feed(
             state, request, source_id=source_id, source_name=source.name
         )
+
+    @router.api_route("/feeds/listen-later.xml", methods=["GET", "HEAD"])
+    def listen_later_feed(request: Request, token: str | None = None) -> Response:
+        state.require_feed_token(token)
+        base = state.base_url(request)
+        episodes = collect_playlist_episodes(
+            state.context.playlists,
+            slug="listen-later",
+            base_url=base,
+            audio_base_url=state.audio_base_url(request),
+            token=state.feed_token,
+            max_items=state.context.config.server.feed_max_items,
+        )
+        xml = build_podcast_rss(
+            FeedChannel(
+                title="Vocast - Listen Later",
+                link=base,
+                description="Articles selected for listening",
+                image_url=with_token(f"{base}/cover.jpg", state.feed_token),
+            ),
+            episodes,
+        )
+        return Response(content=xml, media_type=RSS_MEDIA_TYPE)
 
 
 def _render_feed(
@@ -353,6 +386,31 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
         state.context.entries.requeue(entry_id)
         return JSONResponse({"entry_id": entry_id, "status": EntryStatus.PENDING.value})
 
+    @router.post(
+        "/api/playlists/listen-later/entries/{entry_id}",
+        dependencies=[Depends(require_admin)],
+    )
+    def add_listen_later(entry_id: int, request: Request) -> JSONResponse:
+        _require_same_origin(state, request)
+        if state.context.entries.get(entry_id) is None:
+            raise HTTPException(404, "unknown entry")
+        added = state.context.playlists.add_entry("listen-later", entry_id)
+        return JSONResponse(
+            {"entry_id": entry_id, "queued": True, "changed": added},
+            status_code=201 if added else 200,
+        )
+
+    @router.delete(
+        "/api/playlists/listen-later/entries/{entry_id}",
+        dependencies=[Depends(require_admin)],
+    )
+    def remove_listen_later(entry_id: int, request: Request) -> JSONResponse:
+        _require_same_origin(state, request)
+        if state.context.entries.get(entry_id) is None:
+            raise HTTPException(404, "unknown entry")
+        removed = state.context.playlists.remove_entry("listen-later", entry_id)
+        return JSONResponse({"entry_id": entry_id, "queued": False, "changed": removed})
+
 
 def _admin_guard(state: ServiceState):
     """Require a bearer token for write/admin endpoints when one is configured.
@@ -375,6 +433,26 @@ def _admin_guard(state: ServiceState):
             raise HTTPException(401, "admin token required")
 
     return guard
+
+
+def _require_same_origin(state: ServiceState, request: Request) -> None:
+    """Block browser cross-site writes while leaving non-browser API clients usable."""
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        raise HTTPException(403, "cross-origin playlist changes are not allowed")
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    allowed = {str(request.base_url).rstrip("/")}
+    configured = state.context.config.server.public_base_url
+    if configured:
+        configured_url = urllib.parse.urlsplit(configured)
+        allowed.add(f"{configured_url.scheme}://{configured_url.netloc}")
+    parsed = urllib.parse.urlsplit(origin)
+    normalized = (
+        f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    )
+    if normalized not in allowed:
+        raise HTTPException(403, "cross-origin playlist changes are not allowed")
 
 
 def _validate_source_url(

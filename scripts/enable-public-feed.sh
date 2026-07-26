@@ -110,8 +110,44 @@ if [[ "$no_token" != "401" || "$bad_token" != "401" || "$good_token" != "200" ]]
 fi
 echo "  ok: 401 without a token, 200 with it"
 
-# Funnel only permits 443, 8443, and 10000.
-tailscale funnel --bg --https=443 "$PORT" >/dev/null
+# Tailnet users open /library directly without a token. Funnel maps its public
+# /library path to this protected internal route instead.
+echo "verifying public library token enforcement..."
+private_library="$(check "http://127.0.0.1:${PORT}/library")"
+public_library_no_token="$(check "http://127.0.0.1:${PORT}/public/library")"
+public_library_bad_token="$(check "http://127.0.0.1:${PORT}/public/library?token=definitely-wrong")"
+public_library_good_token="$(check "http://127.0.0.1:${PORT}/public/library?token=${FEED_TOKEN}")"
+
+if [[ "$private_library" != "200" || "$public_library_no_token" != "401" ||
+      "$public_library_bad_token" != "401" || "$public_library_good_token" != "303" ]]; then
+  echo >&2
+  echo "ABORTING: library access separation is not enforced." >&2
+  echo "  tailnet library=${private_library} (want 200)" >&2
+  echo "  public without token=${public_library_no_token} (want 401)" >&2
+  echo "  public bad token=${public_library_bad_token} (want 401)" >&2
+  echo "  public good token=${public_library_good_token} (want 303)" >&2
+  echo "The funnel was NOT changed." >&2
+  exit 1
+fi
+echo "  ok: tailnet library open, public library token-protected"
+
+# Do not publish the service root. Only podcast resources, the protected public
+# library route, and its admin-token-protected playlist actions need Funnel.
+tailscale funnel --https=443 off >/dev/null 2>&1 || true
+tailscale funnel --bg --https=443 --set-path=/feeds \
+  "http://127.0.0.1:${PORT}/feeds" >/dev/null
+tailscale funnel --bg --https=443 --set-path=/feed.xml \
+  "http://127.0.0.1:${PORT}/feed.xml" >/dev/null
+tailscale funnel --bg --https=443 --set-path=/cover.jpg \
+  "http://127.0.0.1:${PORT}/cover.jpg" >/dev/null
+tailscale funnel --bg --https=443 --set-path=/library \
+  "http://127.0.0.1:${PORT}/public/library" >/dev/null
+tailscale funnel --bg --https=443 --set-path=/api/playlists \
+  "http://127.0.0.1:${PORT}/api/playlists" >/dev/null
+if [[ "$PUBLIC_AUDIO" == "1" ]]; then
+  tailscale funnel --bg --https=443 --set-path=/audio \
+    "http://127.0.0.1:${PORT}/audio" >/dev/null
+fi
 echo
 
 echo "Subscribe with this URL (treat it as a password):"
