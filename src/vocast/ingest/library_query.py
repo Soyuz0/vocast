@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
@@ -221,10 +222,10 @@ class LibraryQueryService:
                     FROM entries e JOIN sources s ON s.id = e.source_id
                     WHERE {_ORIGIN_EXPRESSION} != ''
                     GROUP BY UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION}))
-                    ORDER BY n DESC, origin_name COLLATE NOCASE
                     """
                 )
             ]
+        origins.sort(key=lambda origin: alphabetical_key(origin.name))
         return LibraryFacets(
             total=total, queued=queued, by_status=statuses, origins=origins
         )
@@ -312,6 +313,29 @@ class LibraryQueryService:
             progress_done=row["progress_done"],
             progress_total=row["progress_total"],
         )
+
+
+# Latin letters that NFKD does not decompose, because the mark is part of the
+# glyph rather than a combining character. Without these, "Ørsted" sorts after
+# "Zebra" for the same reason "Ácme" would. Not a substitute for locale-aware
+# collation, which would need ICU; enough to put a name under the letter a
+# reader looks for it under.
+_INDIVISIBLE_LETTERS = str.maketrans(
+    {"ø": "o", "æ": "ae", "œ": "oe", "ð": "d", "đ": "d", "þ": "th", "ß": "ss", "ł": "l"}
+)
+
+
+def alphabetical_key(name: str) -> tuple[str, str]:
+    """Sort key that reads as alphabetical to a person.
+
+    SQLite can only order by codepoint, which sorts every accented initial after
+    "z", so "Ácme" would land past "zebra". Folding the accent away puts it under
+    A where it is looked for. The unfolded name breaks ties so names differing
+    only in accent keep a stable order.
+    """
+    folded = unicodedata.normalize("NFKD", name).casefold()
+    stripped = "".join(c for c in folded if not unicodedata.combining(c))
+    return (stripped.translate(_INDIVISIBLE_LETTERS), name)
 
 
 def _escape_like(value: str) -> str:

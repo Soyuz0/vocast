@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from vocast.ingest.db import open_database
-from vocast.ingest.library_query import LibraryQuery, LibraryQueryService
+from vocast.ingest.library_query import (
+    LibraryQuery,
+    LibraryQueryService,
+    alphabetical_key,
+)
 from vocast.ingest.models import EntryStatus, FeedEntry
 from vocast.ingest.repository import (
     EntryRepository,
@@ -262,3 +266,49 @@ def test_every_publication_appears_in_the_facet(library_data):
 
     assert len([n for n in names if n.startswith("Publication ")]) == 60
     assert "Publication 59" in names
+
+
+def test_publications_are_listed_alphabetically(library_data):
+    """With all 80-odd publications shown, alphabetical order is what makes a
+    specific one findable; ordering by article count is only useful for a short
+    top-N list."""
+    db, service = library_data[0], library_data[1]
+    entries = EntryRepository(db)
+    source = SourceRepository(db).add(
+        name="Bulk", kind="rss", url="https://bulk.example.com/feed"
+    )
+    for guid, origin in enumerate(["zebra weekly", "Ácme Review", "middle Post"]):
+        for copy in range(guid + 2):
+            entries.insert_if_new(
+                FeedEntry(
+                    source_id=source.id,
+                    external_guid=f"{origin}-{copy}",
+                    title="Article",
+                    article_url=f"https://articles.example.com/{origin}-{copy}",
+                    published_at=utcnow(),
+                    author="Author",
+                    origin_name=origin,
+                )
+            )
+
+    names = [o.name for o in service.facets().origins]
+
+    assert (
+        names.index("Ácme Review")
+        < names.index("middle Post")
+        < names.index("zebra weekly")
+    )
+
+
+def test_accented_publications_sort_under_their_base_letter():
+    """SQLite orders by codepoint, which would put any accented initial after
+    "z" and so far from where it is looked for."""
+    names = ["Zebra", "Ácme", "Middle", "Ørsted", "apple"]
+
+    assert sorted(names, key=alphabetical_key) == [
+        "Ácme",
+        "apple",
+        "Middle",
+        "Ørsted",
+        "Zebra",
+    ]
