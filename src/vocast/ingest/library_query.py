@@ -73,6 +73,22 @@ class LibraryPage:
 class LibraryOrigin:
     id: str
     name: str
+    count: int = 0
+
+
+@dataclass(frozen=True)
+class LibraryFacets:
+    """Counts for the navigation, over the whole library.
+
+    Deliberately not narrowed by the active filters: these numbers double as
+    navigation, and a count that moved every time you typed in the search box
+    would be useless for deciding where to go next.
+    """
+
+    total: int
+    queued: int
+    by_status: dict[str, int]
+    origins: list[LibraryOrigin]
 
 
 class LibraryQueryService:
@@ -156,6 +172,45 @@ class LibraryQueryService:
         return [
             LibraryOrigin(id=row["origin_id"], name=row["origin_name"]) for row in rows
         ]
+
+    def facets(self, *, origin_limit: int = 40) -> LibraryFacets:
+        """Navigation counts: totals, queue size, statuses and publications."""
+        with self._db.reading() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+            queued = conn.execute(
+                """
+                SELECT COUNT(*) FROM playlist_entries pe
+                JOIN playlists p ON p.id = pe.playlist_id
+                WHERE p.slug = 'listen-later'
+                """
+            ).fetchone()[0]
+            statuses = {
+                row["status"]: row["n"]
+                for row in conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM entries GROUP BY status"
+                )
+            }
+            origins = [
+                LibraryOrigin(
+                    id=row["origin_id"], name=row["origin_name"], count=row["n"]
+                )
+                for row in conn.execute(
+                    f"""
+                    SELECT UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION})) AS origin_id,
+                           MIN({_ORIGIN_EXPRESSION}) AS origin_name,
+                           COUNT(*) AS n
+                    FROM entries e JOIN sources s ON s.id = e.source_id
+                    WHERE {_ORIGIN_EXPRESSION} != ''
+                    GROUP BY UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION}))
+                    ORDER BY n DESC, origin_name COLLATE NOCASE
+                    LIMIT ?
+                    """,
+                    (origin_limit,),
+                )
+            ]
+        return LibraryFacets(
+            total=total, queued=queued, by_status=statuses, origins=origins
+        )
 
     def _normalize(self, query: LibraryQuery) -> LibraryQuery:
         search = query.search.strip() if query.search else None

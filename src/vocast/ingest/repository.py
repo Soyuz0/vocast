@@ -798,6 +798,18 @@ class PlaylistRepository:
                 )
         return cur.rowcount > 0
 
+    def clear(self, slug: str) -> int:
+        """Empty a playlist, returning how many entries were removed."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                """
+                DELETE FROM playlist_entries
+                WHERE playlist_id = (SELECT id FROM playlists WHERE slug = ?)
+                """,
+                (slug,),
+            )
+        return cur.rowcount
+
     def remove_entry(self, slug: str, entry_id: int) -> bool:
         now = to_iso(utcnow())
         with self._db.transaction() as conn:

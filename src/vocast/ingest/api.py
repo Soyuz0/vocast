@@ -30,6 +30,7 @@ from .logs import get_logger, kv
 from .models import EntryStatus, SourceKind
 from .nethttp import BlockedURLError, validate_url
 from .poller import Poller
+from .public_guard import is_public_request, supplied_token
 from .repository import DuplicateSourceError
 from .timeutils import utcnow
 
@@ -46,17 +47,24 @@ class ServiceState:
     worker_running: bool = False
     poller_running: bool = False
 
-    def require_feed_token(self, supplied: str | None) -> None:
-        """Reject feed/audio requests without the configured token.
+    def require_feed_token(self, request: Request, supplied: str | None) -> None:
+        """Reject internet requests for feeds or audio without the token.
 
-        A podcast client cannot send an Authorization header, so the secret has
-        to travel in the URL. Compared with compare_digest to avoid leaking it
-        through timing.
+        A podcast client cannot send an Authorization header, so the secret
+        travels in the URL; a browser that has already exchanged it holds a
+        cookie instead. Either satisfies this, compared with compare_digest to
+        avoid leaking the value through timing.
+
+        Tailnet requests are not challenged, matching the rest of the service.
+        That also keeps the token out of the library page: the page is
+        unauthenticated on the tailnet, so embedding a token for its player to
+        use would hand the public feed's secret to anyone who could reach it.
         """
         expected = self.context.config.server.feed_token
-        if not expected:
+        if not expected or not is_public_request(request):
             return
-        if not supplied or not secrets.compare_digest(supplied, expected):
+        offered = supplied or supplied_token(request)
+        if not offered or not secrets.compare_digest(offered, expected):
             raise HTTPException(401, "a valid ?token= is required for this feed")
 
     @property
@@ -148,14 +156,14 @@ def create_router(state: ServiceState) -> APIRouter:
 def _register_feeds(router: APIRouter, state: ServiceState) -> None:
     @router.api_route("/feeds/all.xml", methods=["GET", "HEAD"])
     def all_feed(request: Request, token: str | None = None) -> Response:
-        state.require_feed_token(token)
+        state.require_feed_token(request, token)
         return _render_feed(state, request, source_id=None)
 
     @router.api_route("/feeds/source/{source_id}.xml", methods=["GET", "HEAD"])
     def source_feed(
         source_id: int, request: Request, token: str | None = None
     ) -> Response:
-        state.require_feed_token(token)
+        state.require_feed_token(request, token)
         source = state.context.sources.get(source_id)
         if source is None:
             return PlainTextResponse("unknown source", status_code=404)
@@ -165,7 +173,7 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
 
     @router.api_route("/feeds/listen-later.xml", methods=["GET", "HEAD"])
     def listen_later_feed(request: Request, token: str | None = None) -> Response:
-        state.require_feed_token(token)
+        state.require_feed_token(request, token)
         base = state.base_url(request)
         episodes = collect_playlist_episodes(
             state.context.playlists,
@@ -404,6 +412,13 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
             {"entry_id": entry_id, "queued": True, "changed": added},
             status_code=201 if added else 200,
         )
+
+    @router.delete("/api/playlists/listen-later/entries")
+    def clear_listen_later(request: Request) -> JSONResponse:
+        """Empty the queue in one step, rather than one request per episode."""
+        _require_same_origin(state, request)
+        removed = state.context.playlists.clear("listen-later")
+        return JSONResponse({"removed": removed})
 
     @router.delete("/api/playlists/listen-later/entries/{entry_id}")
     def remove_listen_later(entry_id: int, request: Request) -> JSONResponse:

@@ -446,6 +446,9 @@ def test_real_entry_ids_are_considered_safe():
     assert library.is_valid_entry_id("20260604T120000Z_the_bitter_lesson_a8f31c")
 
 
+FUNNEL_HEADERS = {"Tailscale-Funnel-Request": "?1"}
+
+
 # --- feed token ------------------------------------------------------------
 
 
@@ -467,8 +470,26 @@ def tokened_client(context: AppContext) -> TestClient:
         "/audio/20260604T120000Z_a_aaa1.mp3",
     ],
 )
-def test_feed_and_audio_require_the_token(tokened_client: TestClient, path: str):
-    assert tokened_client.get(path).status_code == 401
+def test_feed_and_audio_require_the_token_from_the_internet(
+    tokened_client: TestClient, path: str
+):
+    assert tokened_client.get(path, headers=FUNNEL_HEADERS).status_code == 401
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/feed.xml",
+        "/feeds/all.xml",
+        "/feeds/listen-later.xml",
+        "/audio/20260604T120000Z_a_aaa1.mp3",
+    ],
+)
+def test_feed_and_audio_are_open_on_the_tailnet(tokened_client: TestClient, path: str):
+    """Matching the rest of the service, and what keeps the token out of the
+    library page: that page is unauthenticated on the tailnet, so its player
+    must not need a token to fetch audio."""
+    assert tokened_client.get(path).status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -485,7 +506,12 @@ def test_correct_feed_token_is_accepted(tokened_client: TestClient, path: str):
 
 
 def test_wrong_feed_token_is_rejected(tokened_client: TestClient):
-    assert tokened_client.get("/feeds/all.xml?token=nope").status_code == 401
+    assert (
+        tokened_client.get(
+            "/feeds/all.xml?token=nope", headers=FUNNEL_HEADERS
+        ).status_code
+        == 401
+    )
 
 
 def test_enclosure_urls_carry_the_token(tokened_client: TestClient):

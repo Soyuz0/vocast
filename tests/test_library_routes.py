@@ -77,11 +77,13 @@ def test_library_is_server_rendered_and_mobile_friendly(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert '<meta name="viewport"' in response.text
-    assert 'class="cards"' in response.text
+    assert 'class="rows"' in response.text
     assert "An article" in response.text
     assert "Example Publication" in response.text
     assert "Reading List" in response.text
-    assert "Open audio" in response.text
+    # Ready episodes are playable in place rather than via a bare link.
+    assert "data-play" in response.text
+    assert "data-player-audio" in response.text
 
 
 def test_library_searches_and_filters(client: TestClient, context: AppContext):
@@ -95,7 +97,7 @@ def test_library_searches_and_filters(client: TestClient, context: AppContext):
     assert "A matching title" in by_title.text
     assert "Another item" not in by_title.text
     assert "A matching title" in by_publication.text
-    assert "No matching articles" in by_queue.text
+    assert "Nothing matches" in by_queue.text
 
 
 def test_library_escapes_untrusted_metadata(client: TestClient, context: AppContext):
@@ -116,10 +118,24 @@ def test_pagination_preserves_active_query(client: TestClient, context: AppConte
     body = client.get("/library?search=Article&sort=title_asc&page_size=1&page=1").text
 
     assert "Page 1 of 2" in body
-    assert (
-        'href="/library?search=Article&amp;sort=title_asc&amp;page_size=1&amp;page=2"'
-        in body
-    )
+
+    # Asserted by content rather than by exact query-string order, which is an
+    # implementation detail of how links are built.
+    import re
+    from urllib.parse import parse_qs, urlsplit
+
+    hrefs = [
+        h.replace("&amp;", "&") for h in re.findall(r'href="(/library\?[^"]+)"', body)
+    ]
+    next_pages = [
+        parse_qs(urlsplit(h).query)
+        for h in hrefs
+        if parse_qs(urlsplit(h).query).get("page") == ["2"]
+    ]
+    assert next_pages, "no link to page 2"
+    assert next_pages[0]["search"] == ["Article"]
+    assert next_pages[0]["sort"] == ["title_asc"]
+    assert next_pages[0]["page_size"] == ["1"]
 
 
 def test_add_and_remove_actions_are_idempotent(client: TestClient, context: AppContext):
@@ -218,7 +234,7 @@ def test_library_links_support_a_public_path_prefix(
     )
 
     assert 'action="/vocast/library"' in body
-    assert 'href="/vocast/feeds/listen-later.xml"' in body
+    assert 'href="/vocast/library?' in body
     assert 'data-base-path="/vocast"' in body
     assert "basePath + '/api/playlists/listen-later/entries/'" in body
     assert accepted.status_code == 201
@@ -236,8 +252,9 @@ def test_private_feed_links_explain_token_without_exposing_it(
     secure_client = TestClient(client.app, base_url="https://podcast.example.com")
     body = secure_client.get("/public/library?token=private-feed-secret").text
 
-    assert "append your configured feed token" in body
-    assert "feed token required" in body
+    # The page offers a copy button rather than printing URLs, and must never
+    # contain the secret: it is unauthenticated on the tailnet.
+    assert "data-copy-feed" in body
     assert "private-feed-secret" not in body
 
 

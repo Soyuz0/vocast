@@ -50,7 +50,7 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         """The original feed. An alias for /feeds/all.xml once ingestion is on,
         so a subscriber added before RSS support keeps getting every episode."""
         if state is not None:
-            state.require_feed_token(token)
+            state.require_feed_token(request, token)
         base = _base_url(state, request)
         xml = _render_all(state, base, request)
         return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
@@ -58,7 +58,7 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
     @app.api_route("/audio/{entry_id}.mp3", methods=["GET", "HEAD"])
     def audio(request: Request, entry_id: str, token: str | None = None) -> Response:
         if state is not None:
-            state.require_feed_token(token)
+            state.require_feed_token(request, token)
         entry = get_entry(entry_id)
         if entry is None:
             return PlainTextResponse("not found", status_code=404)
@@ -70,9 +70,9 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         return FileResponse(path, media_type="audio/mpeg")
 
     @app.api_route("/cover.jpg", methods=["GET", "HEAD"])
-    def cover(token: str | None = None) -> Response:
+    def cover(request: Request, token: str | None = None) -> Response:
         if state is not None:
-            state.require_feed_token(token)
+            state.require_feed_token(request, token)
         if not _SHOW_COVER:
             return PlainTextResponse("not found", status_code=404)
         return Response(_SHOW_COVER, media_type="image/jpeg")

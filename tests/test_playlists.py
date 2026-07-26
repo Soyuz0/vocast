@@ -218,3 +218,19 @@ def test_playlist_feed_is_unfiltered_when_hiding_is_off(db, repositories):
         )
         == 1
     )
+
+
+def test_clearing_the_queue_removes_everything(db, repositories):
+    _, entries, playlists, source = repositories
+    for guid in ("a", "b", "c"):
+        entry = _entry(entries, source.id, guid)
+        playlists.add_entry("listen-later", entry.id)
+
+    assert playlists.clear("listen-later") == 3
+    assert playlists.entries("listen-later") == []
+    assert playlists.queued_entry_ids() == set()
+
+
+def test_clearing_an_empty_queue_is_harmless(db, repositories):
+    _, _, playlists, _ = repositories
+    assert playlists.clear("listen-later") == 0

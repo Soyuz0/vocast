@@ -17,6 +17,15 @@ from .models import EntryStatus
 
 _LIBRARY_TOKEN_COOKIE = "vocast_library_token"
 
+#: Length filters, as (label, min seconds, max seconds). Chosen around how long
+#: a listening slot is rather than round numbers.
+DURATION_BUCKETS = (
+    ("Under 10 min", None, 600),
+    ("10-30 min", 600, 1800),
+    ("30-60 min", 1800, 3600),
+    ("Over 1 hour", 3600, None),
+)
+
 
 @lru_cache(maxsize=1)
 def _templates() -> Environment:
@@ -75,6 +84,7 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
         )
         service = LibraryQueryService(state.context.db)
         result = service.search(query)
+        base_path = urlsplit(state.base_url(request)).path.rstrip("/")
         current_query = {
             key: value
             for key, value in request.query_params.items()
@@ -86,13 +96,14 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
             .render(
                 page=result,
                 sources=service.sources(),
-                origins=service.origins(),
+                facets=service.facets(),
                 statuses=list(EntryStatus),
                 current_query=current_query,
                 pagination_query=urlencode(current_query),
-                admin_token_required=bool(state.context.config.admin_token),
-                feed_token_required=bool(state.context.config.server.feed_token),
-                base_path=urlsplit(state.base_url(request)).path.rstrip("/"),
+                feed_token=state.feed_token or "",
+                base_path=base_path,
+                duration_buckets=DURATION_BUCKETS,
+                link=_link_builder(base_path, current_query),
             )
         )
         return HTMLResponse(html)
@@ -156,6 +167,27 @@ def _status(value: str | None) -> EntryStatus | None:
         return EntryStatus(value)
     except ValueError as exc:
         raise HTTPException(400, f"unknown status {value!r}") from exc
+
+
+def _link_builder(base_path: str, current: dict[str, str]):
+    """Return a helper that builds library URLs from the active filters.
+
+    Templates need "this page, but with one filter changed or cleared", which
+    Jinja cannot express: its macros take no **kwargs. Building the query string
+    in Python also keeps escaping in one place.
+    """
+
+    def link(**overrides: object) -> str:
+        merged = dict(current)
+        for key, value in overrides.items():
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = str(value)
+        query = urlencode(sorted(merged.items()))
+        return f"{base_path}/library?{query}" if query else f"{base_path}/library"
+
+    return link
 
 
 def _optional_int(value: str | None, name: str) -> int | None:

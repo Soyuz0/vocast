@@ -1,271 +1,531 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Library | Vocast</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --ink: #e8e1cf;
-      --muted: #9b927e;
-      --ground: #11100c;
-      --panel: #1b1913;
-      --line: #393428;
-      --accent: #d29a3b;
-      --ready: #6bb77b;
-      --danger: #df7770;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--ground);
-      color: var(--ink);
-      font: 16px/1.5 system-ui, sans-serif;
-    }
-    a { color: var(--accent); }
-    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-    header, main { width: min(72rem, calc(100% - 2rem)); margin-inline: auto; }
-    header { padding: 2.5rem 0 1rem; border-bottom: 1px solid var(--line); }
-    h1 { margin: 0; font: 2.2rem/1.1 Georgia, serif; letter-spacing: .02em; }
-    header p { margin: .5rem 0 0; color: var(--muted); }
-    .feed-link { display: inline-block; margin-top: .7rem; }
-    details { margin: 1rem 0; border: 1px solid var(--line); background: var(--panel); }
-    summary { cursor: pointer; padding: .9rem 1rem; font-weight: 700; }
-    form { display: grid; gap: .8rem; padding: 0 1rem 1rem; }
-    .field { display: grid; gap: .3rem; min-width: 0; }
-    label { color: var(--muted); font-size: .78rem; font-weight: 700; text-transform: uppercase; }
-    input, select, button, .button {
-      min-height: 44px;
-      border: 1px solid var(--line);
-      border-radius: 3px;
-      background: #0e0d0a;
-      color: var(--ink);
-      padding: .6rem .7rem;
-      font: inherit;
-    }
-    button, .button { cursor: pointer; text-decoration: none; text-align: center; }
-    button:hover, .button:hover { border-color: var(--accent); }
-    .primary { color: var(--accent); }
-    .actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; }
-    .summary { color: var(--muted); margin: 1.25rem 0 .7rem; }
-    .cards { display: grid; gap: .8rem; padding: 0; list-style: none; }
-    .card {
-      display: grid;
-      gap: .7rem;
-      min-width: 0;
-      padding: 1rem;
-      border: 1px solid var(--line);
-      border-left: 4px solid var(--muted);
-      background: var(--panel);
-    }
-    .card.ready { border-left-color: var(--ready); }
-    .card.failed { border-left-color: var(--danger); }
-    h2 { margin: 0; font: 1.25rem/1.3 Georgia, serif; overflow-wrap: anywhere; }
-    .byline, .meta { color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
-    .meta { display: flex; flex-wrap: wrap; gap: .35rem .8rem; }
-    .badges { display: flex; flex-wrap: wrap; gap: .4rem; }
-    .badge { border: 1px solid var(--line); padding: .12rem .45rem; font-size: .72rem; text-transform: uppercase; }
-    .badge.queued { border-color: var(--accent); color: var(--accent); }
-    .card-actions { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
-    .card-actions button, .card-actions .button { flex: 1 1 10rem; }
-    .message { color: var(--muted); font-size: .82rem; }
-    .message.error { color: var(--danger); }
-    .empty { margin: 2rem 0; padding: 2rem; text-align: center; border: 1px dashed var(--line); }
-    nav { display: flex; justify-content: center; align-items: center; gap: .8rem; margin: 1.5rem 0 3rem; }
-    nav .button[aria-disabled="true"] { opacity: .4; pointer-events: none; }
-    .auth-note { color: var(--muted); font-size: .85rem; }
-    @media (min-width: 42rem) {
-      form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .wide, .actions { grid-column: 1 / -1; }
-      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    @media (min-width: 68rem) {
-      form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Library | Vocast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Design tokens, vendored from the design system rather than linked: the page
+   must render on a tailnet with no route to the internet. The webfont is a
+   progressive enhancement and falls back to system-ui. */
+:root {
+  --color-button-main:#4037F0; --color-purple-main:#7674F9; --color-purple-light:#B3AFF9;
+  --color-error:#F86060; --color-warning:#F5963D; --color-caution:#F5EE3D;
+  --color-success:#34C5A2; --color-text-link:#72BBFF;
+  --bg-1:#14141D; --bg-2:#212029; --bg-3:#2C2B34; --bg-4:#414048;
+  --text-white:#FFF; --text-grey:#808080; --text-dark-grey:#4F4F4F;
+  --stroke:#212029; --stroke-bold:rgba(255,255,255,.30);
+  --bg-red:rgba(248,96,96,.10); --bg-orange:rgba(245,150,61,.10);
+  --bg-green:rgba(52,197,162,.10); --bg-purple:rgba(140,135,246,.10);
+  --stroke-red:rgba(199,41,41,.20); --stroke-orange:rgba(245,150,61,.20);
+  --stroke-green:rgba(52,197,162,.20);
+  --space-1:4px; --space-2:8px; --space-3:16px; --space-4:24px; --space-5:32px;
+  --radius-sm:6px; --radius-md:10px; --radius-lg:14px; --radius-pill:999px;
+  --font-display:'Sora',system-ui,sans-serif;
+  --font-mono:'Roboto Mono','SF Mono',ui-monospace,monospace;
+  --shadow-card:0 1px 2px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.3);
+  --focus-ring:0 0 0 2px var(--bg-1), 0 0 0 4px var(--color-button-main);
+  --ease:cubic-bezier(.4,0,.2,1); --fast:120ms; --base:180ms;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg-1)}
+body{font-family:var(--font-display);color:var(--text-white);font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+a{color:var(--color-text-link);text-decoration:none}
+a:hover{text-decoration:underline}
+input,button,select{font-family:inherit;font-size:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:var(--radius-pill);border:3px solid var(--bg-1)}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+.shell{display:flex;min-height:100%}
+
+/* ---- sidebar ---- */
+.side{width:264px;flex:none;background:var(--bg-2);border-right:1px solid var(--stroke);
+  padding:var(--space-4) var(--space-3);display:flex;flex-direction:column;gap:var(--space-4);
+  position:sticky;top:0;height:100vh;overflow-y:auto}
+.brand{display:flex;align-items:center;gap:var(--space-2);font-weight:700;font-size:18px}
+.brand .dot{width:26px;height:26px;border-radius:var(--radius-sm);
+  background:linear-gradient(180deg,var(--color-purple-main),var(--color-success));flex:none}
+.side h2{font-size:13px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--text-grey);margin:0 0 var(--space-2)}
+.side nav,.facet{display:flex;flex-direction:column;gap:2px}
+.navlink,.chipbtn{display:flex;align-items:center;gap:var(--space-2);width:100%;text-align:left;
+  padding:9px var(--space-2);border:0;border-radius:var(--radius-sm);background:transparent;
+  color:var(--text-white);cursor:pointer;transition:background var(--fast) var(--ease)}
+.navlink:hover,.chipbtn:hover{background:var(--bg-3)}
+.navlink[aria-current="page"]{background:var(--bg-purple);color:var(--color-purple-light);font-weight:600}
+.count{margin-left:auto;font-family:var(--font-mono);font-size:12px;color:var(--text-grey)}
+.navlink[aria-current="page"] .count{color:var(--color-purple-light)}
+.chipbtn[aria-pressed="true"]{background:var(--bg-purple);color:var(--color-purple-light)}
+.chipbtn .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.side .grow{flex:1}
+.gen{border:1px solid var(--stroke-green);background:var(--bg-green);border-radius:var(--radius-md);
+  padding:var(--space-2) 10px;font-size:13px;color:var(--color-success)}
+.gen .bar{margin-top:6px;height:3px;border-radius:var(--radius-pill);background:rgba(52,197,162,.25);overflow:hidden}
+.gen .bar span{display:block;height:100%;width:35%;border-radius:inherit;background:var(--color-success);
+  animation:slide 1.9s var(--ease) infinite}
+@keyframes slide{0%{transform:translateX(-110%)}100%{transform:translateX(320%)}}
+.ghost{border:1px solid var(--stroke-bold);background:transparent;color:var(--text-white);
+  border-radius:var(--radius-sm);padding:9px var(--space-3);cursor:pointer;font-size:14px;
+  transition:background var(--fast) var(--ease)}
+.ghost:hover{background:var(--bg-3)}
+
+/* ---- main ---- */
+main{flex:1;min-width:0;padding:var(--space-4);display:flex;flex-direction:column;gap:var(--space-3)}
+.mobilebar{display:none}
+.toolbar{display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}
+.search{position:relative;flex:1;min-width:220px}
+.search input{width:100%;padding:11px 56px 11px var(--space-3);border-radius:var(--radius-md);
+  border:1px solid var(--stroke-bold);background:var(--bg-2);color:var(--text-white);
+  transition:border-color var(--fast) var(--ease)}
+.search input:focus{border-color:var(--color-purple-main)}
+.search input::placeholder{color:var(--text-grey)}
+.search kbd{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-family:var(--font-mono);
+  font-size:11px;color:var(--text-grey);border:1px solid var(--stroke-bold);border-radius:var(--radius-sm);padding:2px 6px}
+select.ghost{appearance:none;padding-right:var(--space-4)}
+.range{font-family:var(--font-mono);font-size:12px;color:var(--text-grey);margin-left:auto}
+.panel{border:1px solid var(--stroke);background:var(--bg-2);border-radius:var(--radius-lg);
+  padding:var(--space-3);display:grid;gap:var(--space-3);grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.panel h3{font-size:13px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--text-grey);margin:0 0 var(--space-2)}
+.pills{display:flex;flex-wrap:wrap;gap:var(--space-1)}
+.pill{border:1px solid var(--stroke-bold);background:transparent;color:var(--text-white);
+  border-radius:var(--radius-pill);padding:6px 12px;font-size:13px;cursor:pointer;text-decoration:none;
+  transition:background var(--fast) var(--ease)}
+.pill:hover{background:var(--bg-3);text-decoration:none}
+.pill[aria-pressed="true"]{background:var(--color-button-main);border-color:var(--color-button-main);font-weight:500}
+.chips{display:flex;flex-wrap:wrap;gap:var(--space-1);align-items:center}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-3);border-radius:var(--radius-pill);
+  padding:5px 6px 5px 12px;font-size:13px}
+.chip a{color:var(--text-grey);font-size:15px;line-height:1;padding:0 4px}
+.chip a:hover{color:var(--text-white);text-decoration:none}
+.summary{font-family:var(--font-mono);font-size:12px;color:var(--text-grey);margin:0}
+
+/* ---- queue header ---- */
+.queuehead{display:flex;align-items:center;gap:var(--space-2);border:1px solid var(--stroke-green);
+  background:var(--bg-green);border-radius:var(--radius-md);padding:10px var(--space-3);flex-wrap:wrap}
+.queuehead .who{font-weight:600}
+.queuehead .who span{font-weight:400;color:var(--text-grey);font-size:14px;margin-left:var(--space-2)}
+.queuehead .actions{margin-left:auto;display:flex;gap:var(--space-2)}
+.primary{background:var(--color-button-main);border:1px solid var(--color-button-main);color:#fff;
+  border-radius:var(--radius-sm);padding:8px var(--space-3);cursor:pointer;font-size:14px;font-weight:500}
+.primary:hover{background:var(--color-purple-main);border-color:var(--color-purple-main)}
+
+/* ---- rows ---- */
+.rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-1)}
+.row{display:grid;grid-template-columns:auto 1fr auto auto auto;align-items:center;gap:var(--space-3);
+  background:var(--bg-2);border:1px solid var(--stroke);border-radius:var(--radius-md);
+  padding:12px var(--space-3);animation:in var(--base) var(--ease) both}
+@keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.row:hover{background:var(--bg-3)}
+.qbtn{width:30px;height:30px;flex:none;border-radius:var(--radius-sm);cursor:pointer;
+  border:1px solid var(--stroke-bold);background:transparent;color:var(--text-grey);font-size:16px;line-height:1}
+.qbtn:hover{background:var(--bg-4);color:var(--text-white)}
+.qbtn[aria-pressed="true"]{background:var(--color-success);border-color:var(--color-success);color:#08231C}
+.row .title{font-weight:500;color:var(--text-white);display:block;text-align:left}
+.row .byline{font-size:13px;color:var(--text-grey);margin-top:3px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.row .byline .sep{color:var(--text-dark-grey)}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 10px;
+  border-radius:var(--radius-pill);border:1px solid var(--stroke-bold);color:var(--text-grey);white-space:nowrap}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.badge.ready{color:var(--color-success);background:var(--bg-green);border-color:var(--stroke-green)}
+.badge.failed{color:var(--color-error);background:var(--bg-red);border-color:var(--stroke-red)}
+.badge.processing{color:var(--color-warning);background:var(--bg-orange);border-color:var(--stroke-orange)}
+.badge.processing::before{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.badge.pending{color:var(--text-grey)}
+.badge.ignored,.badge.expired{color:var(--text-dark-grey)}
+.dl{color:var(--color-purple-light);font-size:12px;white-space:nowrap}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--text-grey);text-align:right;white-space:nowrap}
+.play{width:36px;height:36px;flex:none;border-radius:50%;cursor:pointer;border:1px solid var(--color-purple-main);
+  background:var(--bg-purple);color:var(--color-purple-light);font-size:13px}
+.play:hover{background:var(--color-purple-main);color:#fff}
+.retry{background:none;border:0;color:var(--color-text-link);cursor:pointer;padding:0;font-size:13px;text-decoration:underline}
+.msg{font-size:12px;margin-top:4px}
+.msg.err{color:var(--color-error)}
+
+.empty{border:1px dashed var(--stroke-bold);border-radius:var(--radius-lg);padding:var(--space-5);
+  text-align:center;color:var(--text-grey);display:flex;flex-direction:column;gap:var(--space-2);align-items:center}
+.empty strong{color:var(--text-white);font-size:18px}
+
+.pager{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;padding-top:var(--space-2)}
+.pager .pages{display:flex;gap:var(--space-1);margin-left:auto;flex-wrap:wrap}
+
+/* ---- player ---- */
+.player{position:sticky;bottom:0;margin-top:auto;display:flex;align-items:center;gap:var(--space-3);
+  background:var(--bg-3);border:1px solid var(--stroke-bold);border-radius:var(--radius-lg);
+  padding:10px var(--space-3);box-shadow:var(--shadow-card)}
+.player[hidden]{display:none}
+.player .now{flex:1;min-width:0}
+.player .now b{display:block;font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.player audio{width:100%;margin-top:4px;height:32px}
+.player .x{background:none;border:0;color:var(--text-grey);font-size:20px;cursor:pointer;line-height:1}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---- mobile ---- */
+@media (max-width:860px){
+  .shell{flex-direction:column}
+  .side{display:none}
+  main{padding:var(--space-3);gap:var(--space-2)}
+  .mobilebar{display:flex;align-items:center;gap:var(--space-2)}
+  .mobilebar .dot{width:24px;height:24px;border-radius:var(--radius-sm);
+    background:linear-gradient(180deg,var(--color-purple-main),var(--color-success))}
+  .mobilebar b{font-size:17px}
+  .mobilebar .count{margin-left:auto}
+  .search kbd{display:none}
+  .range{width:100%;margin-left:0}
+  .row{grid-template-columns:1fr auto;gap:var(--space-2);row-gap:6px}
+  .row .statuscell{grid-column:1;display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}
+  .row .meta{grid-column:1;text-align:left}
+  .row .qbtn{grid-column:2;grid-row:1}
+  .row .play{grid-column:2;grid-row:2}
+}
+</style>
 </head>
 <body>
-  <header>
-    <h1>Vocast Library</h1>
-    <p>Find an article here, then keep your podcast app focused with Listen Later.</p>
-    <a class="feed-link" href="{{ base_path }}/feeds/listen-later.xml">Subscribe to the Listen Later feed</a>
-    {% if feed_token_required %}<span class="auth-note"> (append your configured feed token to this private feed URL)</span>{% endif %}
-  </header>
-  <main data-base-path="{{ base_path }}">
-    <details{% if current_query %} open{% endif %}>
-      <summary>Search and filters</summary>
-      <form method="get" action="{{ base_path }}/library">
-        <div class="field wide">
-          <label for="search">Search title, publication, source, or author</label>
-          <input id="search" name="search" value="{{ page.query.search or '' }}" type="search">
-        </div>
-        <div class="field">
-          <label for="origin_id">Publication</label>
-          <select id="origin_id" name="origin_id">
-            <option value="">All publications</option>
-            {% for origin in origins %}
-              <option value="{{ origin.id }}"{% if page.query.origin_id == origin.id %} selected{% endif %}>{{ origin.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="field">
-          <label for="source_id">Vocast source</label>
-          <select id="source_id" name="source_id">
-            <option value="">All sources</option>
-            {% for source in sources %}
-              <option value="{{ source.id }}"{% if page.query.source_id == source.id %} selected{% endif %}>{{ source.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="field">
-          <label for="status">Status</label>
-          <select id="status" name="status">
-            <option value="">Any status</option>
-            {% for status in statuses %}
-              <option value="{{ status.value }}"{% if page.query.status == status %} selected{% endif %}>{{ status.value }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="field">
-          <label for="sort">Sort</label>
-          <select id="sort" name="sort">
-            {% for value, label in [('published_desc','Newest published'),('published_asc','Oldest published'),('title_asc','Title A-Z'),('title_desc','Title Z-A'),('duration_desc','Longest'),('duration_asc','Shortest')] %}
-              <option value="{{ value }}"{% if page.query.sort == value %} selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        {% for name, label, value in [('queued','Listen Later',page.query.queued),('downloaded','Downloaded',page.query.downloaded)] %}
-        <div class="field">
-          <label for="{{ name }}">{{ label }}</label>
-          <select id="{{ name }}" name="{{ name }}">
-            <option value="">Either</option>
-            <option value="yes"{% if value is sameas true %} selected{% endif %}>Yes</option>
-            <option value="no"{% if value is sameas false %} selected{% endif %}>No</option>
-          </select>
-        </div>
+{% set q = current_query %}
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><span class="dot" aria-hidden="true"></span><span>Vocast</span></div>
+
+    <nav aria-label="Views">
+      <a class="navlink" href="{{ link(queued=None, page=None) }}"
+         {% if not q.queued %}aria-current="page"{% endif %}>
+        Library <span class="count">{{ facets.total }}</span>
+      </a>
+      <a class="navlink" href="{{ link(queued='yes', page=None) }}"
+         {% if q.queued == 'yes' %}aria-current="page"{% endif %}>
+        Listen Later <span class="count">{{ facets.queued }}</span>
+      </a>
+    </nav>
+
+    <div>
+      <h2>Status</h2>
+      <div class="facet">
+        {% for status in statuses %}
+        {% set n = facets.by_status.get(status.value, 0) %}
+        {% if n %}
+        <a class="chipbtn" href="{{ link(status=(None if q.status == status.value else status.value), page=None) }}"
+           aria-pressed="{{ 'true' if q.status == status.value else 'false' }}">
+          <span class="label">{{ status.value }}</span><span class="count">{{ n }}</span>
+        </a>
+        {% endif %}
         {% endfor %}
-        <div class="field">
-          <label for="published_after">Published after</label>
-          <input id="published_after" name="published_after" type="date" value="{{ page.query.published_after.strftime('%Y-%m-%d') if page.query.published_after else '' }}">
+      </div>
+    </div>
+
+    <div>
+      <h2>Publications</h2>
+      <div class="facet">
+        {% for origin in facets.origins %}
+        <a class="chipbtn" href="{{ link(origin_id=(None if q.origin_id == origin.id else origin.id), page=None) }}"
+           aria-pressed="{{ 'true' if q.origin_id == origin.id else 'false' }}" title="{{ origin.name }}">
+          <span class="label">{{ origin.name }}</span><span class="count">{{ origin.count }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="grow"></div>
+
+    {% set generating = facets.by_status.get('processing', 0) %}
+    {% if generating %}
+    <div class="gen">
+      Generating {{ generating }} episode{{ '' if generating == 1 else 's' }}
+      <span class="bar"><span></span></span>
+    </div>
+    {% endif %}
+    <button class="ghost" type="button" data-copy-feed>Copy feed URL</button>
+  </aside>
+
+  <main data-base-path="{{ base_path }}">
+    <div class="mobilebar">
+      <span class="dot" aria-hidden="true"></span>
+      <b>{{ 'Listen Later' if q.queued == 'yes' else 'Library' }}</b>
+      <span class="count">{{ facets.queued if q.queued == 'yes' else facets.total }}</span>
+      <button class="ghost" type="button" data-copy-feed>Copy feed</button>
+    </div>
+
+    <form class="toolbar" method="get" action="{{ base_path }}/library">
+      {% for key, value in q.items() if key not in ('search', 'page') %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endfor %}
+      <label class="search">
+        <span class="sr">Search titles, publications, authors</span>
+        <input type="search" name="search" value="{{ page.query.search or '' }}"
+               placeholder="Search titles, publications, authors" autofocus>
+        <kbd>/</kbd>
+      </label>
+      <select class="ghost" name="sort" onchange="this.form.submit()" aria-label="Sort order">
+        {% for value, label in [
+          ('published_desc','Newest first'), ('published_asc','Oldest first'),
+          ('title_asc','Title A-Z'), ('title_desc','Title Z-A'),
+          ('duration_desc','Longest first'), ('duration_asc','Shortest first')] %}
+        <option value="{{ value }}" {% if page.query.sort == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button class="primary" type="submit">Search</button>
+      <span class="range">{{ page.total }} article{{ '' if page.total == 1 else 's' }}</span>
+    </form>
+
+    <details class="panel-wrap" {% if q.min_duration_seconds or q.max_duration_seconds or q.downloaded %}open{% endif %}>
+      <summary class="ghost" style="display:inline-block;margin-bottom:var(--space-2);cursor:pointer">Filters</summary>
+      <div class="panel">
+        <div>
+          <h3>Length</h3>
+          <div class="pills">
+            {% for label, low, high in duration_buckets %}
+            {% set on = (q.min_duration_seconds|default('')) == (low|string if low else '')
+                      and (q.max_duration_seconds|default('')) == (high|string if high else '') %}
+            <a class="pill" aria-pressed="{{ 'true' if on else 'false' }}"
+               href="{{ link(min_duration_seconds=(None if on or not low else low),
+                                  max_duration_seconds=(None if on or not high else high), page=None) }}">{{ label }}</a>
+            {% endfor %}
+          </div>
         </div>
-        <div class="field">
-          <label for="published_before">Published before</label>
-          <input id="published_before" name="published_before" type="date" value="{{ page.query.published_before.strftime('%Y-%m-%d') if page.query.published_before else '' }}">
+        <div>
+          <h3>In queue</h3>
+          <div class="pills">
+            <a class="pill" aria-pressed="{{ 'true' if q.queued == 'yes' else 'false' }}"
+               href="{{ link(queued=(None if q.queued == 'yes' else 'yes'), page=None) }}">Queued</a>
+            <a class="pill" aria-pressed="{{ 'true' if q.queued == 'no' else 'false' }}"
+               href="{{ link(queued=(None if q.queued == 'no' else 'no'), page=None) }}">Not queued</a>
+          </div>
         </div>
-        <div class="field">
-          <label for="min_duration_seconds">Minimum duration (seconds)</label>
-          <input id="min_duration_seconds" name="min_duration_seconds" min="0" type="number" value="{{ page.query.min_duration_seconds if page.query.min_duration_seconds is not none else '' }}">
+        <div>
+          <h3>Only show</h3>
+          <div class="pills">
+            <a class="pill" aria-pressed="{{ 'true' if q.downloaded == 'yes' else 'false' }}"
+               href="{{ link(downloaded=(None if q.downloaded == 'yes' else 'yes'), page=None) }}">Downloaded</a>
+            <a class="pill" aria-pressed="{{ 'true' if q.downloaded == 'no' else 'false' }}"
+               href="{{ link(downloaded=(None if q.downloaded == 'no' else 'no'), page=None) }}">Not downloaded</a>
+          </div>
         </div>
-        <div class="field">
-          <label for="max_duration_seconds">Maximum duration (seconds)</label>
-          <input id="max_duration_seconds" name="max_duration_seconds" min="0" type="number" value="{{ page.query.max_duration_seconds if page.query.max_duration_seconds is not none else '' }}">
-        </div>
-        <div class="actions">
-          <button class="primary" type="submit">Apply filters</button>
-          <a class="button" href="{{ base_path }}/library">Clear</a>
-        </div>
-      </form>
+      </div>
     </details>
 
-    <p class="summary">{{ page.total }} matching article{{ '' if page.total == 1 else 's' }}</p>
+    {% if q %}
+    <div class="chips">
+      {% for key, value in q.items() %}
+      <span class="chip">{{ key | replace('_', ' ') }}: {{ value }}
+        <a href="{{ link(**{key: None, 'page': None}) }}" aria-label="Clear {{ key }}">&times;</a>
+      </span>
+      {% endfor %}
+      <a class="pill" href="{{ base_path }}/library">Reset filters</a>
+    </div>
+    {% endif %}
+
+    {% if q.queued == 'yes' and page.items %}
+    <div class="queuehead">
+      <span class="who">Listen Later <span>{{ facets.queued }} queued</span></span>
+      <div class="actions">
+        <button class="primary" type="button" data-play-all>Play all</button>
+        <button class="ghost" type="button" data-clear-queue>Clear queue</button>
+      </div>
+    </div>
+    {% endif %}
 
     {% if page.items %}
-    <ul class="cards" aria-label="Library articles">
+    <ul class="rows" aria-label="Library articles">
       {% for item in page.items %}
-      <li class="card {{ item.status.value }}" data-card-entry="{{ item.entry_id }}">
-        <h2><a href="{{ item.article_url }}" rel="noopener noreferrer">{{ item.title }}</a></h2>
-        <div class="byline">
-          {{ item.origin_name }}{% if item.source_name != item.origin_name %} via {{ item.source_name }}{% endif %}{% if item.author %} by {{ item.author }}{% endif %}
+      <li class="row" data-card-entry="{{ item.entry_id }}">
+        <button class="qbtn" type="button" data-queue-button data-entry-id="{{ item.entry_id }}"
+                data-queued="{{ 'true' if item.queued else 'false' }}"
+                aria-pressed="{{ 'true' if item.queued else 'false' }}"
+                aria-label="{{ 'Remove from' if item.queued else 'Add to' }} Listen Later">
+          {{ '&#10003;' | safe if item.queued else '+' }}
+        </button>
+        <div>
+          {% if item.episode_id %}
+          <button class="title" type="button" data-play data-entry-id="{{ item.entry_id }}"
+                  data-episode="{{ item.episode_id }}" data-title="{{ item.title }}">{{ item.title }}</button>
+          {% else %}
+          <span class="title">{{ item.title }}</span>
+          {% endif %}
+          <div class="byline">
+            <span>{{ item.origin_name }}</span>
+            {% if item.author %}<span class="sep">&middot;</span><span>{{ item.author }}</span>{% endif %}
+            {% if item.source_name != item.origin_name %}
+            <span class="sep">&middot;</span><span>via {{ item.source_name }}</span>{% endif %}
+            <span class="sep">&middot;</span>
+            <a href="{{ item.article_url }}" target="_blank" rel="noopener noreferrer">Original</a>
+          </div>
+          <div class="msg" data-message role="status"></div>
+        </div>
+        <div class="statuscell">
+          <span class="badge {{ item.status.value }}">{{ item.status.value }}</span>
+          {% if item.downloaded_at %}<span class="dl" data-queue-badge>downloaded</span>{% endif %}
         </div>
         <div class="meta">
-          {% if item.published_at %}<span>Published {{ item.published_at.strftime('%Y-%m-%d') }}</span>{% endif %}
-          {% if item.duration_seconds is not none %}<span>{{ (item.duration_seconds / 60)|round(1) }} min</span>{% endif %}
-          <span>{{ 'Downloaded' if item.downloaded_at else 'Not downloaded' }}</span>
+          {% if item.published_at %}{{ item.published_at.strftime('%b %d') }}{% else %}&mdash;{% endif %}
+          {% if item.duration_seconds %}<br>{{ (item.duration_seconds / 60) | round | int }} min{% endif %}
         </div>
-        <div class="badges">
-          <span class="badge">{{ item.status.value }}</span>
-          {% if item.queued %}<span class="badge queued" data-queue-badge>Listen Later</span>{% endif %}
-        </div>
-        <div class="card-actions">
-          {% if item.status.value == 'ready' and item.episode_id %}
-            <a class="button" href="{{ base_path }}/audio/{{ item.episode_id }}.mp3">Open audio{% if feed_token_required %} (feed token required){% endif %}</a>
-          {% endif %}
-          <button class="primary" type="button" data-queue-button data-entry-id="{{ item.entry_id }}" data-queued="{{ 'true' if item.queued else 'false' }}" aria-pressed="{{ 'true' if item.queued else 'false' }}">
-            {{ 'Remove from Listen Later' if item.queued else 'Add to Listen Later' }}
-          </button>
-          <span class="message" data-message aria-live="polite"></span>
-        </div>
+        {% if item.episode_id %}
+        <button class="play" type="button" data-play data-entry-id="{{ item.entry_id }}"
+                data-episode="{{ item.episode_id }}" data-title="{{ item.title }}"
+                aria-label="Play {{ item.title }}">&#9654;</button>
+        {% else %}
+        <span></span>
+        {% endif %}
       </li>
       {% endfor %}
     </ul>
-    {% else %}
-      <section class="empty">
-        <h2>No matching articles</h2>
-        {% if current_query %}<p>Clear or broaden the filters to see more of the library.</p>{% else %}<p>Add a source and let Vocast discover articles; they will appear here in every processing state.</p>{% endif %}
-      </section>
-    {% endif %}
 
     {% if page.pages > 1 %}
-    <nav aria-label="Pagination">
-      {% set separator = '&' if pagination_query else '' %}
-      <a class="button"{% if page.query.page > 1 %} href="{{ base_path }}/library?{{ pagination_query }}{{ separator }}page={{ page.query.page - 1 }}"{% else %} aria-disabled="true"{% endif %}>Previous</a>
-      <span>Page {{ page.query.page }} of {{ page.pages }}</span>
-      <a class="button"{% if page.query.page < page.pages %} href="{{ base_path }}/library?{{ pagination_query }}{{ separator }}page={{ page.query.page + 1 }}"{% else %} aria-disabled="true"{% endif %}>Next</a>
-    </nav>
+    <div class="pager">
+      <span class="summary">Page {{ page.query.page }} of {{ page.pages }}</span>
+      <div class="pages">
+        {% if page.query.page > 1 %}
+        <a class="pill" href="{{ link(page=page.query.page - 1) }}" aria-label="Previous page">&larr;</a>
+        {% endif %}
+        {% for n in range([1, page.query.page - 2] | max, [page.pages, page.query.page + 2] | min + 1) %}
+        <a class="pill" href="{{ link(page=n) }}"
+           {% if n == page.query.page %}aria-current="page" aria-pressed="true"{% endif %}>{{ n }}</a>
+        {% endfor %}
+        {% if page.query.page < page.pages %}
+        <a class="pill" href="{{ link(page=page.query.page + 1) }}" aria-label="Next page">&rarr;</a>
+        {% endif %}
+      </div>
+    </div>
     {% endif %}
+
+    {% else %}
+    <div class="empty">
+      <strong>Nothing matches</strong>
+      <span>No articles match these filters. Narrated episodes appear here as they finish.</span>
+      <a class="pill" href="{{ base_path }}/library">Reset filters</a>
+    </div>
+    {% endif %}
+
+    <div class="player" hidden data-player>
+      <div class="now">
+        <b data-player-title></b>
+        <audio controls preload="none" data-player-audio></audio>
+      </div>
+      <button class="x" type="button" data-player-close aria-label="Close player">&times;</button>
+    </div>
   </main>
-  <script>
-    (function () {
-      // Queueing needs no separate credential: loading this page already
-      // proved access, so the request just carries the session cookie.
-      async function send(button, method) {
-        var basePath = document.querySelector('main').dataset.basePath;
-        return fetch(basePath + '/api/playlists/listen-later/entries/' + button.dataset.entryId, {
-          method: method,
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin'
-        });
-      }
-      document.addEventListener('click', async function (event) {
-        var button = event.target.closest('[data-queue-button]');
-        if (!button) return;
-        var queued = button.dataset.queued === 'true';
-        var message = button.parentElement.querySelector('[data-message]');
-        button.disabled = true;
-        message.className = 'message';
-        message.textContent = '';
-        try {
-          var response = await send(button, queued ? 'DELETE' : 'POST');
-          if (!response.ok) throw new Error(
-            response.status === 404 ? 'Article no longer exists'
-            : response.status === 401 ? 'Session expired — reload with your token'
-            : 'Could not update Listen Later');
-          var next = !queued;
-          button.dataset.queued = next ? 'true' : 'false';
-          button.setAttribute('aria-pressed', next ? 'true' : 'false');
-          button.textContent = next ? 'Remove from Listen Later' : 'Add to Listen Later';
-          var card = button.closest('[data-card-entry]');
-          var badge = card.querySelector('[data-queue-badge]');
-          if (next && !badge) {
-            badge = document.createElement('span');
-            badge.className = 'badge queued';
-            badge.dataset.queueBadge = '';
-            badge.textContent = 'Listen Later';
-            card.querySelector('.badges').appendChild(badge);
-          } else if (!next && badge) badge.remove();
-          message.textContent = next ? 'Added' : 'Removed';
-        } catch (error) {
-          message.className = 'message error';
-          message.textContent = error.message || 'Request failed';
-        } finally {
-          button.disabled = false;
-        }
-      });
-    }());
-  </script>
+</div>
+
+<script>
+(function () {
+  var main = document.querySelector('main');
+  var basePath = main.dataset.basePath;
+  // No token here on purpose. Over the tailnet none is needed; over the
+  // internet the browser already holds the cookie it exchanged for one, and
+  // embedding the secret in a page that is open on the tailnet would leak it.
+  function audioUrl(episodeId) {
+    return basePath + '/audio/' + encodeURIComponent(episodeId) + '.mp3';
+  }
+
+  // ---- inline player: a queue of episode ids, so "Play all" is just a list.
+  var player = document.querySelector('[data-player]');
+  var audio = player.querySelector('[data-player-audio]');
+  var nowTitle = player.querySelector('[data-player-title]');
+  var upNext = [];
+
+  function play(episodeId, title) {
+    nowTitle.textContent = title;
+    audio.src = audioUrl(episodeId);
+    player.hidden = false;
+    audio.play().catch(function () { /* autoplay may be blocked; controls remain */ });
+  }
+  audio.addEventListener('ended', function () {
+    var next = upNext.shift();
+    if (next) play(next.episode, next.title);
+  });
+  player.querySelector('[data-player-close]').addEventListener('click', function () {
+    audio.pause(); player.hidden = true; upNext = [];
+  });
+
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('[data-play]');
+    if (!button) return;
+    upNext = [];
+    play(button.dataset.episode, button.dataset.title);
+  });
+
+  var playAll = document.querySelector('[data-play-all]');
+  if (playAll) playAll.addEventListener('click', function () {
+    var buttons = Array.prototype.slice.call(document.querySelectorAll('.play[data-play]'));
+    if (!buttons.length) return;
+    upNext = buttons.slice(1).map(function (b) {
+      return { episode: b.dataset.episode, title: b.dataset.title };
+    });
+    play(buttons[0].dataset.episode, buttons[0].dataset.title);
+  });
+
+  // ---- feed URL, with the token when one is configured
+  Array.prototype.forEach.call(document.querySelectorAll('[data-copy-feed]'), function (button) {
+    button.addEventListener('click', async function () {
+      var url = location.origin + basePath + '/feeds/'
+        + (new URLSearchParams(location.search).get('queued') === 'yes' ? 'listen-later' : 'all')
+        + '.xml';
+      var original = button.textContent;
+      try { await navigator.clipboard.writeText(url); button.textContent = 'Copied'; }
+      catch (_) { window.prompt('Feed URL', url); }
+      setTimeout(function () { button.textContent = original; }, 1600);
+    });
+  });
+
+  // ---- queue toggle. No extra credential: loading this page proved access.
+  async function queueRequest(entryId, method) {
+    return fetch(basePath + '/api/playlists/listen-later/entries/' + entryId, {
+      method: method,
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin'
+    });
+  }
+
+  document.addEventListener('click', async function (event) {
+    var button = event.target.closest('[data-queue-button]');
+    if (!button) return;
+    var queued = button.dataset.queued === 'true';
+    var message = button.closest('.row').querySelector('[data-message]');
+    button.disabled = true;
+    message.className = 'msg';
+    message.textContent = '';
+    try {
+      var response = await queueRequest(button.dataset.entryId, queued ? 'DELETE' : 'POST');
+      if (!response.ok) throw new Error(
+        response.status === 404 ? 'Article no longer exists'
+        : response.status === 401 ? 'Session expired \u2014 reload with your token'
+        : 'Could not update Listen Later');
+      var next = !queued;
+      button.dataset.queued = next ? 'true' : 'false';
+      button.setAttribute('aria-pressed', next ? 'true' : 'false');
+      button.innerHTML = next ? '\u2713' : '+';
+      button.setAttribute('aria-label', (next ? 'Remove from' : 'Add to') + ' Listen Later');
+    } catch (error) {
+      message.className = 'msg err';
+      message.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  var clearQueue = document.querySelector('[data-clear-queue]');
+  if (clearQueue) clearQueue.addEventListener('click', async function () {
+    if (!window.confirm('Remove every episode from Listen Later?')) return;
+    var response = await fetch(basePath + '/api/playlists/listen-later/entries', {
+      method: 'DELETE', credentials: 'same-origin'
+    });
+    if (response.ok) location.reload();
+  });
+
+  // ---- "/" focuses search, the one shortcut worth having
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== '/' || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+    event.preventDefault();
+    document.querySelector('.search input').focus();
+  });
+})();
+</script>
 </body>
 </html>
