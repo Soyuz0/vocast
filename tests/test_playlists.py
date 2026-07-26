@@ -126,3 +126,95 @@ def test_deleting_playlist_cascades_membership(repositories, db: Database):
     with db.reading() as conn:
         count = conn.execute("SELECT COUNT(*) FROM playlist_entries").fetchone()[0]
     assert count == 0
+
+
+# --- consumption retires an episode from every feed ------------------------
+
+
+def _queued_ready_entry(db, repositories):
+    _, entries, playlists, source = repositories
+    entry = _entry(entries, source.id, "queued-one")
+    entries.mark_ready(
+        entry.id, episode_id="ep-queued", duration_seconds=60.0, audio_bytes=1000
+    )
+    playlists.add_entry("listen-later", entry.id)
+    return entry
+
+
+def _mark_downloaded(db, entry_id: int, when: str) -> None:
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE entries SET downloaded_at = ? WHERE id = ?", (when, entry_id)
+        )
+
+
+def test_downloaded_episode_retires_from_the_playlist_feed_too(db, repositories):
+    """An episode is consumed once, wherever it was fetched from.
+
+    Downloading it via the combined feed must retire it from Listen Later as
+    well, rather than leaving it queued in the feed it was not fetched through.
+    """
+    from vocast.ingest.feeds import collect_playlist_episodes
+
+    _, _, playlists, _ = repositories
+    entry = _queued_ready_entry(db, repositories)
+
+    assert (
+        len(
+            collect_playlist_episodes(
+                playlists, slug="listen-later", base_url="https://h"
+            )
+        )
+        == 1
+    )
+
+    _mark_downloaded(db, entry.id, "2020-01-01T00:00:00+00:00")
+
+    assert (
+        collect_playlist_episodes(
+            playlists,
+            slug="listen-later",
+            base_url="https://h",
+            hide_downloaded_before=utcnow() - timedelta(hours=48),
+        )
+        == []
+    )
+
+
+def test_a_recent_download_stays_in_the_playlist_feed(db, repositories):
+    """The delay exists because downloading is not the same as listening."""
+    from vocast.ingest.feeds import collect_playlist_episodes
+    from vocast.ingest.timeutils import to_iso
+
+    _, _, playlists, _ = repositories
+    entry = _queued_ready_entry(db, repositories)
+    _mark_downloaded(db, entry.id, to_iso(utcnow()))
+
+    assert (
+        len(
+            collect_playlist_episodes(
+                playlists,
+                slug="listen-later",
+                base_url="https://h",
+                hide_downloaded_before=utcnow() - timedelta(hours=48),
+            )
+        )
+        == 1
+    )
+
+
+def test_playlist_feed_is_unfiltered_when_hiding_is_off(db, repositories):
+    from vocast.ingest.feeds import collect_playlist_episodes
+
+    _, _, playlists, _ = repositories
+    entry = _queued_ready_entry(db, repositories)
+    _mark_downloaded(db, entry.id, "2020-01-01T00:00:00+00:00")
+
+    assert (
+        len(
+            collect_playlist_episodes(
+                playlists, slug="listen-later", base_url="https://h"
+            )
+        )
+        == 1
+    )

@@ -855,9 +855,19 @@ class PlaylistRepository:
         return {item.entry_id for item in self.entries(slug)}
 
     def published_episodes(
-        self, slug: str, *, limit: int | None = None
+        self,
+        slug: str,
+        *,
+        limit: int | None = None,
+        hide_downloaded_before: datetime | None = None,
     ) -> list[PlaylistEpisode]:
-        """Ready playlist items in queue order, with feed provenance."""
+        """Ready playlist items in queue order, with feed provenance.
+
+        hide_downloaded_before drops episodes fetched a while ago, matching the
+        combined feed: an episode is consumed once, wherever it was fetched
+        from, so it should retire from every feed rather than lingering in
+        whichever one it was not downloaded through.
+        """
         with self._db.reading() as conn:
             rows = conn.execute(
                 f"""
@@ -871,14 +881,18 @@ class PlaylistRepository:
                 JOIN sources s ON s.id = e.source_id
                 WHERE p.slug = ? AND e.status = ?
                   AND e.vocast_episode_id IS NOT NULL
+                  AND (? IS NULL OR e.downloaded_at IS NULL
+                       OR e.downloaded_at > ?)
                 ORDER BY pe.position IS NULL, pe.position ASC,
                          pe.added_at DESC, pe.entry_id DESC
                 {"LIMIT ?" if limit is not None else ""}
                 """,
                 (
-                    (slug, EntryStatus.READY.value, limit)
-                    if limit is not None
-                    else (slug, EntryStatus.READY.value)
+                    slug,
+                    EntryStatus.READY.value,
+                    to_iso(hide_downloaded_before),
+                    to_iso(hide_downloaded_before),
+                    *((limit,) if limit is not None else ()),
                 ),
             ).fetchall()
         return [
@@ -979,28 +993,44 @@ class ConsumptionRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    def record_download(self, episode_id: str) -> Entry | None:
-        """Note that an episode's audio was fetched. First fetch wins.
+    #: Repeated requests inside this window count as one download. A client
+    #: fetching an episode in ranges would otherwise trigger a write per range.
+    REMARK_AFTER = timedelta(minutes=15)
 
-        Returns the entry when this was the first download, else None, so a
-        caller can act once (marking the article read) without repeating it on
-        every subsequent range request or re-download.
+    def record_download(self, episode_id: str) -> Entry | None:
+        """Note that an episode's audio was fetched.
+
+        Returns the entry when the article should be marked read upstream, which
+        is on a first download and on any later one outside the debounce window.
+        Re-downloading has to mark it read again: marking an article unread by
+        hand and fetching it a second time is a deliberate act, and the first
+        download should not permanently suppress the response to it.
+
+        downloaded_at keeps the *first* fetch, since it drives how long an
+        episode stays listed and that clock should not restart.
         """
+        now = utcnow()
         with self._db.transaction() as conn:
-            cur = conn.execute(
-                """
-                UPDATE entries SET downloaded_at = ?
-                WHERE vocast_episode_id = ? AND downloaded_at IS NULL
-                """,
-                (to_iso(utcnow()), episode_id),
-            )
-            if cur.rowcount == 0:
-                return None
             row = conn.execute(
-                f"SELECT {_ENTRY_COLUMNS} FROM entries WHERE vocast_episode_id = ?",
+                "SELECT id, marked_read_at FROM entries WHERE vocast_episode_id = ?",
                 (episode_id,),
             ).fetchone()
-        return Entry.from_row(row) if row else None
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE entries SET downloaded_at = COALESCE(downloaded_at, ?)
+                WHERE vocast_episode_id = ?
+                """,
+                (to_iso(now), episode_id),
+            )
+            marked = from_iso(row["marked_read_at"])
+            if marked is not None and now - marked < self.REMARK_AFTER:
+                return None
+            entry = conn.execute(
+                f"SELECT {_ENTRY_COLUMNS} FROM entries WHERE id = ?", (row["id"],)
+            ).fetchone()
+        return Entry.from_row(entry) if entry else None
 
     def mark_read_upstream(self, entry_id: int) -> None:
         with self._db.transaction() as conn:

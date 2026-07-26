@@ -128,11 +128,14 @@ def collect_playlist_episodes(
     audio_base_url: str | None = None,
     token: str | None = None,
     max_items: int | None = None,
+    hide_downloaded_before: datetime | None = None,
 ) -> list[FeedEpisode]:
     """Assemble ready playlist items without changing their queue order."""
     audio_base = audio_base_url or base_url
     episodes: list[FeedEpisode] = []
-    for item in playlists.published_episodes(slug, limit=max_items):
+    for item in playlists.published_episodes(
+        slug, limit=max_items, hide_downloaded_before=hide_downloaded_before
+    ):
         details = item.episode
         if details.duration_seconds is not None and details.audio_bytes is not None:
             episodes.append(_from_details(details, audio_base, token=token))

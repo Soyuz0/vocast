@@ -170,6 +170,7 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
         episodes = collect_playlist_episodes(
             state.context.playlists,
             slug="listen-later",
+            hide_downloaded_before=state.hide_downloaded_before(),
             base_url=base,
             audio_base_url=state.audio_base_url(request),
             token=state.feed_token,

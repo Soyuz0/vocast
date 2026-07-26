@@ -693,3 +693,43 @@ def _feed_items(client: TestClient):
     return ElementTree.fromstring(client.get("/feeds/all.xml").text).findall(
         "./channel/item"
     )
+
+
+def test_redownload_marks_the_article_read_again(
+    client: TestClient, context: AppContext, downloadable
+):
+    """Marking an article unread by hand and fetching it again is deliberate.
+
+    The first download must not permanently suppress the response to later ones.
+    """
+
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3")
+    first = context.entries.get(downloadable).downloaded_at
+    assert first is not None
+
+    # The reader is told it is read; the user then marks it unread by hand.
+    context.consumption.mark_read_upstream(downloadable)
+    with context.db.transaction() as conn:
+        conn.execute(
+            "UPDATE entries SET marked_read_at = ? WHERE id = ?",
+            ("2020-01-01T00:00:00+00:00", downloadable),
+        )
+
+    assert context.consumption.record_download("20260604T120000Z_a_aaa1") is not None
+    # The listing clock still runs from the first fetch, not the latest.
+    assert context.entries.get(downloadable).downloaded_at == first
+
+
+def test_repeated_requests_during_one_download_mark_read_once(
+    client: TestClient, context: AppContext, downloadable
+):
+    """A client fetching in ranges must not trigger a write per range."""
+    assert context.consumption.record_download("20260604T120000Z_a_aaa1") is not None
+    context.consumption.mark_read_upstream(downloadable)
+
+    assert context.consumption.record_download("20260604T120000Z_a_aaa1") is None
+    assert context.consumption.record_download("20260604T120000Z_a_aaa1") is None
+
+
+def test_download_of_an_unknown_episode_is_ignored(context: AppContext):
+    assert context.consumption.record_download("no-such-episode") is None
