@@ -6,6 +6,7 @@ The generator is stubbed throughout: no network, no model download, no speech.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -46,8 +47,9 @@ def source_id(db: Database) -> int:
 class StubGenerator:
     """Returns a canned episode, or raises a scripted sequence of errors."""
 
-    def __init__(self, *, results: list[object] | None = None) -> None:
+    def __init__(self, *, results: list[object] | None = None, chunks: int = 2) -> None:
         self.results = results or []
+        self.chunks = chunks
         self.calls: list[tuple[str, str | None]] = []
         self.bylines: list[str | None] = []
         self.covers: list[str | None] = []
@@ -63,12 +65,16 @@ class StubGenerator:
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
         content_html: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> GeneratedEpisode:
         self.calls.append((url, title))
         self.bylines.append(byline)
         self.covers.append(cover_url)
         self.replaced.append(replace_episode_id)
         self.bodies.append(content_html)
+        if on_progress is not None:
+            for done in range(1, self.chunks + 1):
+                on_progress(done, self.chunks)
         result = (
             self.results.pop(0)
             if self.results
@@ -544,3 +550,38 @@ def test_first_generation_does_not_ask_for_a_replacement(
     generator = StubGenerator()
     _worker(entries, generator).process_next()
     assert generator.replaced == [None]
+
+
+def test_worker_persists_progress_while_synthesis_is_running(
+    entries: EntryRepository, source_id: int
+):
+    """The library reads progress off the row, so it has to be written during
+    synthesis, not after: a value that only appears at the end shows nothing."""
+    entry = _queue(entries, source_id)
+    observed: list[tuple[int | None, int | None]] = []
+
+    class ProgressSpy(StubGenerator):
+        def generate_from_url(self, url, *, on_progress=None, **kwargs):
+            on_progress(2, 5)
+            mid = entries.get(entry.id)
+            observed.append((mid.progress_done, mid.progress_total))
+            return super().generate_from_url(url, on_progress=on_progress, **kwargs)
+
+    _worker(entries, ProgressSpy()).process_next()
+
+    assert observed == [(2, 5)]
+
+
+def test_a_failing_entry_keeps_no_stale_progress(
+    entries: EntryRepository, source_id: int
+):
+    """Progress left behind would render a bar on a row that is not running."""
+    entry = _queue(entries, source_id)
+    generator = StubGenerator(results=[PermanentGenerationError("no article text")])
+
+    _worker(entries, generator).process_next()
+
+    stored = entries.get(entry.id)
+    assert stored.status is EntryStatus.FAILED
+    assert stored.progress_done is None
+    assert stored.progress_total is None

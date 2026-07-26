@@ -56,6 +56,24 @@ class LibraryItem:
     status: EntryStatus
     downloaded_at: datetime | None
     queued: bool
+    progress_done: int | None
+    progress_total: int | None
+
+    @property
+    def progress_percent(self) -> int | None:
+        """Synthesis progress, or None when there is nothing meaningful to show.
+
+        Only reported while processing: a finished or failed entry keeps no
+        progress, and a just-claimed entry has none until its first chunk lands.
+        Single-chunk articles are excluded because a bar that only ever reads
+        0% or 100% is noise.
+        """
+        if self.status is not EntryStatus.PROCESSING:
+            return None
+        done, total = self.progress_done, self.progress_total
+        if not done or not total or total < 2:
+            return None
+        return max(1, min(99, round(done / total * 100)))
 
 
 @dataclass(frozen=True)
@@ -134,6 +152,7 @@ class LibraryQueryService:
                        {_ORIGIN_EXPRESSION} AS origin_name,
                        UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION})) AS origin_id,
                        e.published_at, e.duration_seconds, e.audio_bytes, e.status,
+                       e.progress_done, e.progress_total,
                        e.downloaded_at, pe.entry_id IS NOT NULL AS queued
                 FROM entries e
                 JOIN sources s ON s.id = e.source_id
@@ -292,6 +311,8 @@ class LibraryQueryService:
             status=EntryStatus(row["status"]),
             downloaded_at=from_iso(row["downloaded_at"]),
             queued=bool(row["queued"]),
+            progress_done=row["progress_done"],
+            progress_total=row["progress_total"],
         )
 
 

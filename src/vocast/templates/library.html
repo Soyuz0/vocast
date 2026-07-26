@@ -135,6 +135,12 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
 .badge.pending{color:var(--text-grey)}
 /* One source of truth for what each state looks like, so the sidebar dots and
    the row badges cannot drift apart. */
+/* Determinate: the fill is chunks-synthesized over chunks-total, so it never
+   guesses. Capped at 99% because the last chunk is followed by encoding. */
+.prog{margin-top:8px;height:3px;max-width:340px;border-radius:999px;
+  background:var(--stroke);overflow:hidden}
+.prog>span{display:block;height:100%;border-radius:inherit;
+  background:var(--color-warning);transition:width .4s ease}
 .dot-status{width:8px;height:8px;border-radius:50%;flex:none;background:var(--text-grey)}
 .dot-status.ready{background:var(--color-success)}
 .dot-status.failed{background:var(--color-error)}
@@ -432,6 +438,7 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
     {% if page.items %}
     <ul class="rows" aria-label="Library articles">
       {% for item in page.items %}
+      {% set pct = item.progress_percent %}
       <li class="row" data-card-entry="{{ item.entry_id }}">
         <button class="qbtn" type="button" data-queue-button data-entry-id="{{ item.entry_id }}"
                 data-queued="{{ 'true' if item.queued else 'false' }}"
@@ -453,15 +460,22 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
             <span class="sep">&middot;</span><span>via {{ item.source_name }}</span>{% endif %}
             <span class="sep">&middot;</span>
             <span class="mobstatus">
-              <span class="dot-status {{ item.status.value }}" aria-hidden="true"></span>{{ item.status.value }}
+              <span class="dot-status {{ item.status.value }}" aria-hidden="true"></span>{{ item.status.value }}{% if pct %} {{ pct }}%{% endif %}
             </span>
             <span class="sep">&middot;</span>
             <a href="{{ item.article_url }}" target="_blank" rel="noopener noreferrer">Original</a>
           </div>
+          {% if pct %}
+          <div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+               aria-valuenow="{{ pct }}"
+               aria-label="Narration {{ pct }} percent complete">
+            <span style="width: {{ pct }}%"></span>
+          </div>
+          {% endif %}
           <div class="msg" data-message role="status"></div>
         </div>
         <div class="statuscell">
-          <span class="badge {{ item.status.value }}">{{ item.status.value }}</span>
+          <span class="badge {{ item.status.value }}">{{ item.status.value }}{% if pct %} {{ pct }}%{% endif %}</span>
           {% if item.downloaded_at %}<span class="dl" data-queue-badge>downloaded</span>{% endif %}
         </div>
         <div class="meta">

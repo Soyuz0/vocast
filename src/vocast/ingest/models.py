@@ -111,6 +111,8 @@ class Entry:
     downloaded_at: datetime | None
     marked_read_at: datetime | None
     feed_content: str | None
+    progress_done: int | None
+    progress_total: int | None
     status: EntryStatus
     vocast_episode_id: str | None
     content_hash: str | None
@@ -138,6 +140,8 @@ class Entry:
             downloaded_at=from_iso(row["downloaded_at"]),
             marked_read_at=from_iso(row["marked_read_at"]),
             feed_content=row["feed_content"],
+            progress_done=row["progress_done"],
+            progress_total=row["progress_total"],
             status=EntryStatus(row["status"]),
             vocast_episode_id=row["vocast_episode_id"],
             content_hash=row["content_hash"],

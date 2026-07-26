@@ -118,6 +118,7 @@ class EpisodeGenerator(Protocol):
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
         content_html: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> GeneratedEpisode: ...
 
 
@@ -156,6 +157,7 @@ class VocastEpisodeGenerator:
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
         content_html: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> GeneratedEpisode:
         if content_html:
             # The post's own text, supplied because its link points elsewhere.
@@ -179,6 +181,7 @@ class VocastEpisodeGenerator:
                 voice=voice,
                 progress=False,
                 should_continue=self._should_continue,
+                on_progress=on_progress,
             )
         except SynthesisCancelled as exc:
             raise GenerationCancelled(f"narration of {url} stopped: {exc}") from exc

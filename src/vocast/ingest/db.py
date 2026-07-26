@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -151,6 +151,13 @@ VALUES (
 ON CONFLICT(slug) DO NOTHING;
 """
 
+# How far synthesis has got, in chunks. Recorded so a long article shows
+# progress rather than an opaque "processing": the longest here take hours.
+_SCHEMA_V9 = """
+ALTER TABLE entries ADD COLUMN progress_done INTEGER;
+ALTER TABLE entries ADD COLUMN progress_total INTEGER;
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
@@ -160,6 +167,7 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (6, _SCHEMA_V6),
     (7, _SCHEMA_V7),
     (8, _SCHEMA_V8),
+    (9, _SCHEMA_V9),
 ]
 
 

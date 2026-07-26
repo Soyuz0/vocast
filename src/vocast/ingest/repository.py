@@ -26,7 +26,8 @@ _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
     origin_name, origin_image_url, status, vocast_episode_id, content_hash,
     duration_seconds, audio_bytes, downloaded_at, marked_read_at, feed_content,
-    retry_count, next_retry_at, claimed_at, error_message, created_at, updated_at
+    progress_done, progress_total, retry_count, next_retry_at, claimed_at,
+    error_message, created_at, updated_at
 """
 
 
@@ -419,6 +420,18 @@ class EntryRepository:
             ).fetchone()
         return Entry.from_row(claimed)
 
+    def record_progress(self, entry_id: int, done: int, total: int) -> None:
+        """Store how far synthesis has got. Called once per chunk.
+
+        Deliberately narrow: this runs every chunk, so it must not touch
+        updated_at or anything else that other logic keys off.
+        """
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE entries SET progress_done = ?, progress_total = ? WHERE id = ?",
+                (done, total, entry_id),
+            )
+
     def mark_ready(
         self,
         entry_id: int,
@@ -440,6 +453,7 @@ class EntryRepository:
                 UPDATE entries
                 SET status = ?, vocast_episode_id = ?, content_hash = ?,
                     duration_seconds = ?, audio_bytes = ?,
+                    progress_done = NULL, progress_total = NULL,
                     error_message = NULL, next_retry_at = NULL, claimed_at = NULL,
                     updated_at = ?
                 WHERE id = ?
@@ -465,7 +479,8 @@ class EntryRepository:
                 """
                 UPDATE entries
                 SET status = ?, retry_count = retry_count + 1, error_message = ?,
-                    next_retry_at = ?, claimed_at = NULL, updated_at = ?
+                    next_retry_at = ?, claimed_at = NULL,
+                    progress_done = NULL, progress_total = NULL, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -484,7 +499,8 @@ class EntryRepository:
                 """
                 UPDATE entries
                 SET status = ?, retry_count = retry_count + 1, error_message = ?,
-                    next_retry_at = NULL, claimed_at = NULL, updated_at = ?
+                    next_retry_at = NULL, claimed_at = NULL,
+                    progress_done = NULL, progress_total = NULL, updated_at = ?
                 WHERE id = ?
                 """,
                 (EntryStatus.FAILED.value, error[:2000], now, entry_id),
@@ -510,7 +526,8 @@ class EntryRepository:
                 f"""
                 UPDATE entries
                 SET status = ?, {retry_clause} {episode_clause} next_retry_at = NULL,
-                    claimed_at = NULL, error_message = NULL, updated_at = ?
+                    claimed_at = NULL, error_message = NULL,
+                    progress_done = NULL, progress_total = NULL, updated_at = ?
                 WHERE id = ?
                 """,
                 (EntryStatus.PENDING.value, now, entry_id),

@@ -7,6 +7,7 @@ external broker.
 
 from __future__ import annotations
 
+import functools
 import os
 import threading
 from collections.abc import Callable
@@ -118,6 +119,7 @@ class Worker:
                 cover_url=entry.origin_image_url,
                 replace_episode_id=entry.vocast_episode_id,
                 content_html=entry.feed_content,
+                on_progress=functools.partial(self._record_progress, entry.id),
             )
         except GenerationCancelled as exc:
             # Deliberate stop: requeue without counting an attempt, so pausing
@@ -139,6 +141,17 @@ class Worker:
             return self._handle_transient(entry, f"{type(exc).__name__}: {exc}")
 
         return self._succeed(entry, episode)
+
+    def _record_progress(self, entry_id: int, done: int, total: int) -> None:
+        """Persist chunk progress, ignoring failures.
+
+        Called once per chunk purely so the library can show a bar; losing an
+        update is not worth interrupting synthesis for.
+        """
+        try:
+            self._entries.record_progress(entry_id, done, total)
+        except Exception:  # noqa: BLE001 - cosmetic telemetry only
+            log.debug("could not record progress for entry %s", entry_id)
 
     def _succeed(self, entry: Entry, episode: GeneratedEpisode) -> WorkOutcome:
         self._entries.mark_ready(

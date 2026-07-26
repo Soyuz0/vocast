@@ -497,3 +497,55 @@ def test_sidebar_does_not_report_generation_progress(
 
     assert "Generating" not in body
     assert 'class="gen"' not in body
+
+
+def _processing_with_progress(context: AppContext, done: int, total: int, **kwargs):
+    entry = _add_entry(context, status=EntryStatus.PROCESSING, **kwargs)
+    context.entries.record_progress(entry.id, done, total)
+    return entry
+
+
+def test_processing_entry_shows_a_determinate_bar(
+    client: TestClient, context: AppContext
+):
+    """Chunks synthesized over chunks total, so the width is a real measurement."""
+    _processing_with_progress(context, done=3, total=4)
+    body = client.get("/library").text
+
+    assert 'role="progressbar"' in body
+    assert 'aria-valuenow="75"' in body
+    assert "width: 75%" in body
+    assert "processing 75%" in body
+
+
+def test_progress_bar_absent_before_the_first_chunk_lands(
+    client: TestClient, context: AppContext
+):
+    """A just-claimed entry has no progress; an empty bar would imply stalled."""
+    _add_entry(context, status=EntryStatus.PROCESSING)
+    body = client.get("/library").text
+
+    assert 'role="progressbar"' not in body
+
+
+def test_single_chunk_article_gets_no_bar(client: TestClient, context: AppContext):
+    """A bar that can only read 0% or 100% conveys nothing."""
+    _processing_with_progress(context, done=1, total=1)
+
+    assert 'role="progressbar"' not in client.get("/library").text
+
+
+def test_finished_entry_shows_no_progress(client: TestClient, context: AppContext):
+    """Progress is cleared on completion, so a ready row cannot show a stale bar."""
+    entry = _processing_with_progress(context, done=2, total=4)
+    context.entries.mark_ready(
+        entry.id,
+        episode_id="ep-1",
+        content_hash="abc",
+        duration_seconds=90.0,
+        audio_bytes=1024,
+    )
+
+    stored = context.entries.get(entry.id)
+    assert stored.progress_done is None
+    assert 'role="progressbar"' not in client.get("/library").text
