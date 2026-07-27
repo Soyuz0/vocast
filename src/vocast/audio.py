@@ -1,3 +1,4 @@
+import logging
 import warnings
 from pathlib import Path
 
@@ -20,6 +21,8 @@ with warnings.catch_warnings():
 # Use the ffmpeg binary bundled with imageio-ffmpeg so users don't need a
 # system ffmpeg install. pydub shells out to this for MP3 encoding.
 AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
+
+log = logging.getLogger("vocast.audio")
 
 
 def concat_with_silence(chunks: list[AudioChunk], gap_ms: int = 120) -> AudioChunk:
@@ -59,15 +62,23 @@ def write_audio(
             channels=1,
         )
         # Embed cover art (ID3 APIC) when given a usable image. If embedding
-        # fails for any reason, still produce the mp3 without art.
+        # fails for any reason, still produce the mp3 without art: missing
+        # artwork is a far better outcome than no episode. The failure is
+        # logged rather than swallowed, because silently dropping art from
+        # every episode would otherwise look like the feature never existed.
         if cover_path is not None and Path(cover_path).exists():
             try:
                 seg.export(
                     path, format="mp3", bitrate=mp3_bitrate, cover=str(cover_path)
                 )
                 return
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - any failure falls back
+                log.warning(
+                    "could not embed cover art in %s, writing without it: %s: %s",
+                    path,
+                    type(exc).__name__,
+                    exc,
+                )
         seg.export(path, format="mp3", bitrate=mp3_bitrate)
         return
     raise ValueError(f"unsupported output format: {suffix!r} (use .mp3 or .wav)")

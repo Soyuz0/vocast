@@ -187,15 +187,22 @@ class Poller:
                 kv(source_id=source.id, discovered=len(discovered)),
             )
             return
+        unread = {e.external_guid for e in discovered}
         try:
-            ignored = self._entries.ignore_read_upstream(
-                source.id, {e.external_guid for e in discovered}
-            )
+            ignored = self._entries.ignore_read_upstream(source.id, unread)
+            # Narrated episodes follow the reader as well, so an article read
+            # there leaves the feed and one marked unread again comes back.
+            marked, cleared = self._entries.sync_read_upstream(source.id, unread)
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "read reconciliation failed %s", kv(source_id=source.id, error=exc)
             )
             return
+        if marked or cleared:
+            log.info(
+                "aligned read state with the reader %s",
+                kv(source_id=source.id, marked_read=marked, marked_unread=cleared),
+            )
         result.ignored = ignored
         if ignored:
             log.info(

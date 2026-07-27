@@ -30,7 +30,7 @@ class LibraryQuery:
     origin_id: str | None = None
     status: EntryStatus | None = None
     queued: bool | None = None
-    downloaded: bool | None = None
+    read: bool | None = None
     published_after: datetime | None = None
     published_before: datetime | None = None
     min_duration_seconds: int | None = None
@@ -55,7 +55,7 @@ class LibraryItem:
     duration_seconds: float | None
     audio_bytes: int | None
     status: EntryStatus
-    downloaded_at: datetime | None
+    read_at: datetime | None
     queued: bool
     progress_done: int | None
     progress_total: int | None
@@ -166,7 +166,7 @@ class LibraryQueryService:
                        UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION})) AS origin_id,
                        e.published_at, e.duration_seconds, e.audio_bytes, e.status,
                        e.progress_done, e.progress_total,
-                       e.downloaded_at, pe.entry_id IS NOT NULL AS queued
+                       e.read_at, pe.entry_id IS NOT NULL AS queued
                 FROM entries e
                 JOIN sources s ON s.id = e.source_id
                 {playlist_join}
@@ -306,11 +306,9 @@ class LibraryQueryService:
             clauses.append(
                 "pe.entry_id IS NOT NULL" if query.queued else "pe.entry_id IS NULL"
             )
-        if query.downloaded is not None:
+        if query.read is not None:
             clauses.append(
-                "e.downloaded_at IS NOT NULL"
-                if query.downloaded
-                else "e.downloaded_at IS NULL"
+                "e.read_at IS NOT NULL" if query.read else "e.read_at IS NULL"
             )
         if query.published_after is not None:
             clauses.append("e.published_at >= ?")
@@ -343,7 +341,7 @@ class LibraryQueryService:
             duration_seconds=row["duration_seconds"],
             audio_bytes=row["audio_bytes"],
             status=EntryStatus(row["status"]),
-            downloaded_at=from_iso(row["downloaded_at"]),
+            read_at=from_iso(row["read_at"]),
             queued=bool(row["queued"]),
             progress_done=row["progress_done"],
             progress_total=row["progress_total"],

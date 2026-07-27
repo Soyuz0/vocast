@@ -81,14 +81,15 @@ class ServerConfig:
     #: feed be published on a public endpoint while the audio it points at stays
     #: on a private network, so only titles ever leave.
     audio_base_url: str | None = None
-    #: Drop episodes from the feed this many hours after their audio was
-    #: downloaded. The files are kept. None keeps everything listed.
+    #: Drop episodes from the feed this many hours after they were marked read.
+    #: The files are kept. None keeps everything listed.
     #:
-    #: This is "downloaded N hours ago", not "listened to": a podcast client
-    #: never reports playback back. Set the delay long enough that a download
-    #: reliably implies you have heard it, and note that clients report an
-    #: episode leaving the feed as withdrawn by the publisher.
-    hide_after_download_hours: int | None = None
+    #: An episode is marked read when its audio is downloaded, or when the
+    #: article is read in the reader. Neither means "listened to" -- a podcast
+    #: client never reports playback back -- so set the delay long enough that
+    #: having the file reliably implies you have heard it, and note that clients
+    #: report an episode leaving the feed as withdrawn by the publisher.
+    hide_after_read_hours: int | None = None
     #: Most recent episodes to include in a feed. Podcast clients neither want
     #: nor reliably handle tens of thousands of items, and every item costs a
     #: metadata read. None means no limit.
@@ -317,10 +318,14 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
             public_base_url=_clean_base_url(server.get("public_base_url")),
             feed_token=_as_optional_str(server.get("feed_token")),
             audio_base_url=_clean_base_url(server.get("audio_base_url")),
-            hide_after_download_hours=_as_optional_int(
-                server.get("hide_after_download_hours"),
-                ServerConfig.hide_after_download_hours,
-                "server.hide_after_download_hours",
+            hide_after_read_hours=_as_optional_int(
+                # The old key is still honoured: silently reverting to the
+                # default would leave every episode listed forever.
+                server.get(
+                    "hide_after_read_hours", server.get("hide_after_download_hours")
+                ),
+                ServerConfig.hide_after_read_hours,
+                "server.hide_after_read_hours",
             ),
             recent_feed_items=_as_int(
                 server.get("recent_feed_items"),
@@ -495,9 +500,9 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_SERVER_AUDIO_BASE_URL", "server", "audio_base_url", "base_url"),
     ("VOCAST_SERVER_FEED_MAX_ITEMS", "server", "feed_max_items", "opt_int"),
     (
-        "VOCAST_SERVER_HIDE_AFTER_DOWNLOAD_HOURS",
+        "VOCAST_SERVER_HIDE_AFTER_READ_HOURS",
         "server",
-        "hide_after_download_hours",
+        "hide_after_read_hours",
         "opt_int",
     ),
     (

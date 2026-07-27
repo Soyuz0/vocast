@@ -71,9 +71,9 @@ class ServiceState:
     def feed_token(self) -> str | None:
         return self.context.config.server.feed_token
 
-    def hide_downloaded_before(self) -> datetime | None:
+    def hide_read_before(self) -> datetime | None:
         """Cutoff for dropping already-downloaded episodes from the feed."""
-        hours = self.context.config.server.hide_after_download_hours
+        hours = self.context.config.server.hide_after_read_hours
         if not hours:
             return None
         return utcnow() - timedelta(hours=hours)
@@ -104,28 +104,31 @@ class ServiceState:
             self.context.consumption.mark_read_upstream,
         )
 
-    def clear_download(self, entry_id: int) -> tuple[bool, bool]:
-        """Undo a download. Returns (found, still marked read upstream).
+    def set_read(self, entry_id: int, *, read: bool) -> tuple[bool, bool]:
+        """Mark an entry read or unread. Returns (found, upstream refused).
 
-        Unlike record_download this runs from a deliberate click, so the upstream
-        call is synchronous: if FreshRSS refuses, read reconciliation would quietly
-        re-ignore the entry on the next full poll, and the listener should hear
-        about that now rather than notice the episode vanish tomorrow.
+        The reader is kept in step, and synchronously, unlike the marking that
+        happens while serving audio. That one must not add latency to a download;
+        this runs from a deliberate click, and if the reader refuses, the next
+        full poll would quietly undo the change, so the listener should hear
+        about it now rather than notice the episode move tomorrow.
         """
-        entry = self.context.consumption.clear_download(entry_id)
+        entry = self.context.consumption.set_read(entry_id, read=read)
         if entry is None:
             return False, False
         source = self.context.sources.get(entry.source_id)
         if source is None or source.kind != SourceKind.FRESHRSS_API.value:
             return True, False
+        writer = FreshRSSWriter(source, policy=self.context.fetch_policy())
         try:
-            FreshRSSWriter(source, policy=self.context.fetch_policy()).mark_unread(
-                entry.external_guid
-            )
+            if read:
+                writer.mark_read(entry.external_guid)
+            else:
+                writer.mark_unread(entry.external_guid)
         except Exception as exc:  # noqa: BLE001 - reported to the caller
             log.warning(
-                "could not mark article unread upstream %s",
-                kv(entry_id=entry_id, error=exc),
+                "could not change the upstream read marker %s",
+                kv(entry_id=entry_id, read=read, error=exc),
             )
             return True, True
         return True, False
@@ -222,7 +225,7 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
         episodes = collect_playlist_episodes(
             state.context.playlists,
             slug="listen-later",
-            hide_downloaded_before=state.hide_downloaded_before(),
+            hide_read_before=state.hide_read_before(),
             base_url=base,
             audio_base_url=state.audio_base_url(request),
             token=state.feed_token,
@@ -238,6 +241,18 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
             episodes,
         )
         return Response(content=xml, media_type=RSS_MEDIA_TYPE)
+
+
+def _set_read(
+    state: ServiceState, request: Request, entry_id: int, *, read: bool
+) -> JSONResponse:
+    _require_same_origin(state, request)
+    found, upstream_failed = state.set_read(entry_id, read=read)
+    if not found:
+        raise HTTPException(404, "unknown entry")
+    return JSONResponse(
+        {"entry_id": entry_id, "read": read, "upstream_failed": upstream_failed}
+    )
 
 
 def _render_feed(
@@ -262,7 +277,7 @@ def _render_feed(
             if max_items is not None
             else state.context.config.server.feed_max_items
         ),
-        hide_downloaded_before=state.hide_downloaded_before(),
+        hide_read_before=state.hide_read_before(),
     )
     title = title or (f"vocast — {source_name}" if source_name else "vocast")
     description = description or (
@@ -453,15 +468,15 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
     # on a page you already authenticated to is friction without a threat model.
     # Same-origin is still enforced, and the administrative endpoints are
     # unchanged.
-    # Same reasoning as the Listen Later buttons below: undoing a download is
-    # ordinary use of an already-gated page, not an administrative action.
-    @router.post("/api/entries/{entry_id}/undownload")
-    def undownload_entry(entry_id: int, request: Request) -> JSONResponse:
-        _require_same_origin(state, request)
-        found, upstream_failed = state.clear_download(entry_id)
-        if not found:
-            raise HTTPException(404, "unknown entry")
-        return JSONResponse({"entry_id": entry_id, "upstream_failed": upstream_failed})
+    # Same reasoning as the Listen Later buttons below: changing what you have
+    # read is ordinary use of an already-gated page, not an administrative act.
+    @router.post("/api/entries/{entry_id}/read")
+    def mark_entry_read(entry_id: int, request: Request) -> JSONResponse:
+        return _set_read(state, request, entry_id, read=True)
+
+    @router.delete("/api/entries/{entry_id}/read")
+    def mark_entry_unread(entry_id: int, request: Request) -> JSONResponse:
+        return _set_read(state, request, entry_id, read=False)
 
     @router.post("/api/playlists/listen-later/entries/{entry_id}")
     def add_listen_later(entry_id: int, request: Request) -> JSONResponse:

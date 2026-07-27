@@ -630,7 +630,7 @@ def downloadable(context: AppContext) -> int:
 
 def test_download_is_recorded(client: TestClient, context: AppContext, downloadable):
     assert client.get("/audio/20260604T120000Z_a_aaa1.mp3").status_code == 200
-    assert context.entries.get(downloadable).downloaded_at is not None
+    assert context.entries.get(downloadable).read_at is not None
 
 
 def test_head_request_is_not_a_download(
@@ -638,23 +638,23 @@ def test_head_request_is_not_a_download(
 ):
     """Clients probe with HEAD for metadata; that is not consumption."""
     client.head("/audio/20260604T120000Z_a_aaa1.mp3")
-    assert context.entries.get(downloadable).downloaded_at is None
+    assert context.entries.get(downloadable).read_at is None
 
 
 def test_small_range_probe_is_not_a_download(
     client: TestClient, context: AppContext, downloadable
 ):
     client.get("/audio/20260604T120000Z_a_aaa1.mp3", headers={"Range": "bytes=0-1023"})
-    assert context.entries.get(downloadable).downloaded_at is None
+    assert context.entries.get(downloadable).read_at is None
 
 
 def test_download_time_is_not_overwritten_by_a_refetch(
     client: TestClient, context: AppContext, downloadable
 ):
     client.get("/audio/20260604T120000Z_a_aaa1.mp3")
-    first = context.entries.get(downloadable).downloaded_at
+    first = context.entries.get(downloadable).read_at
     client.get("/audio/20260604T120000Z_a_aaa1.mp3")
-    assert context.entries.get(downloadable).downloaded_at == first
+    assert context.entries.get(downloadable).read_at == first
 
 
 def test_no_upstream_write_unless_enabled(
@@ -673,7 +673,7 @@ def test_downloaded_episode_leaves_the_feed_after_the_delay(
 ):
     context.config = replace(
         context.config,
-        server=replace(context.config.server, hide_after_download_hours=24),
+        server=replace(context.config.server, hide_after_read_hours=24),
     )
     client = TestClient(create_app(ServiceState(context=context)))
     assert len(_feed_items(client)) == 1
@@ -683,7 +683,7 @@ def test_downloaded_episode_leaves_the_feed_after_the_delay(
 
     with context.db.transaction() as conn:
         conn.execute(
-            "UPDATE entries SET downloaded_at = ? WHERE id = ?",
+            "UPDATE entries SET read_at = ? WHERE id = ?",
             ("2020-01-01T00:00:00+00:00", downloadable),
         )
     assert _feed_items(client) == []
@@ -695,7 +695,7 @@ def test_episodes_stay_listed_when_hiding_is_off(
     client.get("/audio/20260604T120000Z_a_aaa1.mp3")
     with context.db.transaction() as conn:
         conn.execute(
-            "UPDATE entries SET downloaded_at = ? WHERE id = ?",
+            "UPDATE entries SET read_at = ? WHERE id = ?",
             ("2020-01-01T00:00:00+00:00", downloadable),
         )
     assert len(_feed_items(client)) == 1
@@ -705,12 +705,12 @@ def test_hidden_episode_audio_is_still_served(context: AppContext, downloadable)
     """The files are kept; only the listing changes."""
     context.config = replace(
         context.config,
-        server=replace(context.config.server, hide_after_download_hours=1),
+        server=replace(context.config.server, hide_after_read_hours=1),
     )
     client = TestClient(create_app(ServiceState(context=context)))
     with context.db.transaction() as conn:
         conn.execute(
-            "UPDATE entries SET downloaded_at = ? WHERE id = ?",
+            "UPDATE entries SET read_at = ? WHERE id = ?",
             ("2020-01-01T00:00:00+00:00", downloadable),
         )
     assert _feed_items(client) == []
@@ -734,7 +734,7 @@ def test_redownload_marks_the_article_read_again(
     """
 
     client.get("/audio/20260604T120000Z_a_aaa1.mp3")
-    first = context.entries.get(downloadable).downloaded_at
+    first = context.entries.get(downloadable).read_at
     assert first is not None
 
     # The reader is told it is read; the user then marks it unread by hand.
@@ -747,7 +747,7 @@ def test_redownload_marks_the_article_read_again(
 
     assert context.consumption.record_download("20260604T120000Z_a_aaa1") is not None
     # The listing clock still runs from the first fetch, not the latest.
-    assert context.entries.get(downloadable).downloaded_at == first
+    assert context.entries.get(downloadable).read_at == first
 
 
 def test_repeated_requests_during_one_download_mark_read_once(
@@ -834,13 +834,13 @@ def test_recent_feed_drops_what_has_been_downloaded(context: AppContext):
     context.config = replace(
         context.config,
         server=replace(
-            context.config.server, recent_feed_items=10, hide_after_download_hours=24
+            context.config.server, recent_feed_items=10, hide_after_read_hours=24
         ),
     )
     client = TestClient(create_app(ServiceState(context=context)))
     with context.db.transaction() as conn:
         conn.execute(
-            "UPDATE entries SET downloaded_at = ? WHERE vocast_episode_id = ?",
+            "UPDATE entries SET read_at = ? WHERE vocast_episode_id = ?",
             ("2020-01-01T00:00:00+00:00", "20260604T120000Z_a_aaa0"),
         )
 
@@ -857,7 +857,7 @@ def test_recent_feed_keeps_a_just_downloaded_episode_during_the_grace(
     context.config = replace(
         context.config,
         server=replace(
-            context.config.server, recent_feed_items=10, hide_after_download_hours=24
+            context.config.server, recent_feed_items=10, hide_after_read_hours=24
         ),
     )
     client = TestClient(create_app(ServiceState(context=context)))

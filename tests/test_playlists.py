@@ -144,7 +144,7 @@ def _queued_ready_entry(db, repositories):
 def _mark_downloaded(db, entry_id: int, when: str) -> None:
     with db.transaction() as conn:
         conn.execute(
-            "UPDATE entries SET downloaded_at = ? WHERE id = ?", (when, entry_id)
+            "UPDATE entries SET read_at = ? WHERE id = ?", (when, entry_id)
         )
 
 
@@ -175,7 +175,7 @@ def test_downloaded_episode_retires_from_the_playlist_feed_too(db, repositories)
             playlists,
             slug="listen-later",
             base_url="https://h",
-            hide_downloaded_before=utcnow() - timedelta(hours=48),
+            hide_read_before=utcnow() - timedelta(hours=48),
         )
         == []
     )
@@ -196,7 +196,7 @@ def test_a_recent_download_stays_in_the_playlist_feed(db, repositories):
                 playlists,
                 slug="listen-later",
                 base_url="https://h",
-                hide_downloaded_before=utcnow() - timedelta(hours=48),
+                hide_read_before=utcnow() - timedelta(hours=48),
             )
         )
         == 1

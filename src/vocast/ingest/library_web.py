@@ -46,7 +46,7 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
         origin_id: str | None = None,
         status: str | None = None,
         queued: str | None = None,
-        downloaded: str | None = None,
+        read: str | None = None,
         published_after: str | None = None,
         published_before: str | None = None,
         min_duration_seconds: str | None = None,
@@ -69,7 +69,7 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
             origin_id=origin_id,
             status=_status(status),
             queued=_boolean(queued, "queued"),
-            downloaded=_boolean(downloaded, "downloaded"),
+            read=_boolean(read, "read"),
             published_after=_date_boundary(published_after, end=False),
             published_before=_date_boundary(published_before, end=True),
             min_duration_seconds=_optional_int(

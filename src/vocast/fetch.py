@@ -75,13 +75,13 @@ def fetch_article_parts(
     """
     html = (html_fetcher or _fetch_html)(url)
 
-    options = {
-        "include_comments": False,
-        "include_tables": False,
-        "prune_xpath": ["//pre"],
-    }
     result = trafilatura.extract(
-        html, output_format="json", with_metadata=True, **options
+        html,
+        output_format="json",
+        with_metadata=True,
+        include_comments=False,
+        include_tables=False,
+        prune_xpath=["//pre"],
     )
     if result is None:
         raise ValueError(f"could not extract content from {url}")
@@ -94,5 +94,15 @@ def fetch_article_parts(
     if not text:
         raise ValueError(f"extracted empty content from {url}")
 
-    quotes = quotes_from_xml(trafilatura.extract(html, output_format="xml", **options))
+    # A second pass: the plain output drops the quote elements, and rebuilding
+    # the narration from the structured one would change the text.
+    quotes = quotes_from_xml(
+        trafilatura.extract(
+            html,
+            output_format="xml",
+            include_comments=False,
+            include_tables=False,
+            prune_xpath=["//pre"],
+        )
+    )
     return title, text, cover_image_url, quotes

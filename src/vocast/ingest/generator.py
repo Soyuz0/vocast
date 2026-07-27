@@ -299,15 +299,23 @@ class VocastEpisodeGenerator:
         code blocks stripped, boilerplate dropped, paragraphs preserved.
         """
         document = f"<html><body>{content_html}</body></html>"
-        options = {
-            "include_comments": False,
-            "include_tables": False,
-            "prune_xpath": ["//pre"],
-        }
         try:
-            extracted = trafilatura.extract(document, **options)
+            extracted = trafilatura.extract(
+                document,
+                include_comments=False,
+                include_tables=False,
+                prune_xpath=["//pre"],
+            )
+            # A second pass, because the plain output drops the quote elements
+            # and rebuilding the text from the structured one would change it.
             quotes = quotes_from_xml(
-                trafilatura.extract(document, output_format="xml", **options)
+                trafilatura.extract(
+                    document,
+                    output_format="xml",
+                    include_comments=False,
+                    include_tables=False,
+                    prune_xpath=["//pre"],
+                )
             )
         except Exception as exc:
             raise PermanentGenerationError(

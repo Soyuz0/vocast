@@ -112,7 +112,7 @@ class Entry:
     origin_image_url: str | None
     duration_seconds: float | None
     audio_bytes: int | None
-    downloaded_at: datetime | None
+    read_at: datetime | None
     marked_read_at: datetime | None
     feed_content: str | None
     post_url: str | None
@@ -142,7 +142,7 @@ class Entry:
             origin_image_url=row["origin_image_url"],
             duration_seconds=row["duration_seconds"],
             audio_bytes=row["audio_bytes"],
-            downloaded_at=from_iso(row["downloaded_at"]),
+            read_at=from_iso(row["read_at"]),
             marked_read_at=from_iso(row["marked_read_at"]),
             feed_content=row["feed_content"],
             post_url=row["post_url"],

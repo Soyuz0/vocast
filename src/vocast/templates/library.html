@@ -156,11 +156,17 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
 .dot-status.pending{background:var(--text-grey)}
 .dot-status.ignored,.dot-status.expired{background:var(--text-dark-grey)}
 .badge.ignored,.badge.expired{color:var(--text-dark-grey)}
-.dl{color:var(--color-purple-light);font-size:12px;white-space:nowrap;
+.dl{color:var(--text-grey);font-size:12px;white-space:nowrap;
   border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;
   padding:2px 6px;cursor:pointer;font-family:inherit}
+.dl[data-read="true"]{color:var(--color-purple-light)}
 .dl:hover:not(:disabled){border-color:var(--stroke-bold);color:var(--text-white)}
 .dl:disabled{opacity:.5;cursor:default}
+/* The mobile row has no status cell, so read sits inline with the other
+   metadata and has to look like the links beside it. */
+.linkish{background:none;border:0;padding:0;font:inherit;cursor:pointer;
+  color:var(--text-grey);text-decoration:underline}
+.linkish[data-read="true"]{color:var(--color-purple-light)}
 /* The row badge carries status on wide screens; on mobile it moves inline with
    the byline, where there is no room for a separate column. */
 .mobstatus{display:none;align-items:center;gap:6px}
@@ -365,7 +371,7 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
       <button class="ghost deskonly" type="button" data-refresh>&#8635; Refresh</button>
     </form>
 
-    <details class="panel-wrap" {% if q.min_duration_seconds or q.max_duration_seconds or q.downloaded %}open{% endif %}>
+    <details class="panel-wrap" {% if q.min_duration_seconds or q.max_duration_seconds or q.read %}open{% endif %}>
       <summary class="ghost" style="display:inline-block;margin-bottom:var(--space-2);cursor:pointer">Filters</summary>
       <div class="panel">
         <div class="sheetchrome">
@@ -429,12 +435,12 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
           </div>
         </div>
         <div>
-          <h3>Only show</h3>
+          <h3>Read</h3>
           <div class="pills">
-            <a class="pill" aria-pressed="{{ 'true' if q.downloaded == 'yes' else 'false' }}"
-               href="{{ link(downloaded=(None if q.downloaded == 'yes' else 'yes'), page=None) }}">Downloaded</a>
-            <a class="pill" aria-pressed="{{ 'true' if q.downloaded == 'no' else 'false' }}"
-               href="{{ link(downloaded=(None if q.downloaded == 'no' else 'no'), page=None) }}">Not downloaded</a>
+            <a class="pill" aria-pressed="{{ 'true' if q.read == 'no' else 'false' }}"
+               href="{{ link(read=(None if q.read == 'no' else 'no'), page=None) }}">Unread</a>
+            <a class="pill" aria-pressed="{{ 'true' if q.read == 'yes' else 'false' }}"
+               href="{{ link(read=(None if q.read == 'yes' else 'yes'), page=None) }}">Read</a>
           </div>
         </div>
         <div class="mobileonly">
@@ -492,6 +498,12 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
               <span class="dot-status {{ item.status.value }}" aria-hidden="true"></span>{{ item.status.value }}{% if pct %} {{ pct }}%{% endif %}
             </span>
             <span class="sep">&middot;</span>
+            <button class="linkish" type="button" data-read-toggle
+                    data-entry-id="{{ item.entry_id }}"
+                    data-read="{{ 'true' if item.read_at else 'false' }}"
+                    aria-pressed="{{ 'true' if item.read_at else 'false' }}">{{
+              'read' if item.read_at else 'mark read' }}</button>
+            <span class="sep">&middot;</span>
             <a href="{{ item.article_url }}" target="_blank" rel="noopener noreferrer">Original</a>
           </div>
           {% if pct %}
@@ -505,10 +517,11 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
         </div>
         <div class="statuscell">
           <span class="badge {{ item.status.value }}">{{ item.status.value }}{% if pct %} {{ pct }}%{% endif %}</span>
-          {% if item.downloaded_at %}
-          <button class="dl" type="button" data-undownload data-entry-id="{{ item.entry_id }}"
-                  title="Put this episode back in the feeds">downloaded &#10005;</button>
-          {% endif %}
+          <button class="dl" type="button" data-read-toggle
+                  data-entry-id="{{ item.entry_id }}"
+                  data-read="{{ 'true' if item.read_at else 'false' }}"
+                  aria-pressed="{{ 'true' if item.read_at else 'false' }}">{{
+            'read' if item.read_at else 'mark read' }}</button>
         </div>
         <div class="meta">
           {% if item.published_at %}{{ item.published_at.strftime('%b %d') }}{% else %}&mdash;{% endif %}
@@ -669,37 +682,45 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
     }
   });
 
-  // ---- undo an accidental download: clears the local mark and, for FreshRSS
-  // sources, the upstream read flag, without which reconciliation would drop
-  // the episode again on the next full poll.
+  // ---- read marker. Kept in step with the reader in both directions: without
+  // the upstream half, reconciliation would undo the change on the next poll.
+  // Every row can carry two of these, one per breakpoint, so both are updated.
   document.addEventListener('click', async function (event) {
-    var button = event.target.closest('[data-undownload]');
+    var button = event.target.closest('[data-read-toggle]');
     if (!button) return;
-    var message = button.closest('.row').querySelector('[data-message]');
-    button.disabled = true;
+    var row = button.closest('.row');
+    var buttons = row.querySelectorAll('[data-read-toggle]');
+    var read = button.dataset.read === 'true';
+    var message = row.querySelector('[data-message]');
+    Array.prototype.forEach.call(buttons, function (b) { b.disabled = true; });
     message.className = 'msg';
     message.textContent = '';
     try {
       var response = await fetch(
-        basePath + '/api/entries/' + button.dataset.entryId + '/undownload',
-        { method: 'POST', credentials: 'same-origin' });
+        basePath + '/api/entries/' + button.dataset.entryId + '/read',
+        { method: read ? 'DELETE' : 'POST', credentials: 'same-origin' });
       if (!response.ok) throw new Error(
         response.status === 404 ? 'Article no longer exists'
         : response.status === 401 ? 'Session expired \u2014 reload with your token'
-        : 'Could not undo the download');
+        : 'Could not change the read marker');
       var body = await response.json();
-      button.remove();
+      Array.prototype.forEach.call(buttons, function (b) {
+        b.dataset.read = body.read ? 'true' : 'false';
+        b.setAttribute('aria-pressed', body.read ? 'true' : 'false');
+        b.textContent = body.read ? 'read' : 'mark read';
+      });
       if (body.upstream_failed) {
         message.className = 'msg err';
-        message.textContent = 'Back in the feeds, but still read in FreshRSS \u2014 it may be dropped again';
+        message.textContent = 'Changed here, but FreshRSS refused \u2014 the next poll may undo it';
       } else {
         message.className = 'msg ok';
-        message.textContent = 'Back in the feeds';
+        message.textContent = body.read ? 'Marked read' : 'Marked unread';
       }
     } catch (error) {
-      button.disabled = false;
       message.className = 'msg err';
       message.textContent = error.message;
+    } finally {
+      Array.prototype.forEach.call(buttons, function (b) { b.disabled = false; });
     }
   });
 

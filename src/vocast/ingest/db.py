@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -165,6 +165,13 @@ _SCHEMA_V10 = """
 ALTER TABLE entries ADD COLUMN post_url TEXT;
 """
 
+# Renamed from downloaded_at. The column always meant "the listener has this",
+# and it is kept in step with the reader's own read flag in both directions, so
+# naming it after the transport that happened to set it was misleading.
+_SCHEMA_V11 = """
+ALTER TABLE entries RENAME COLUMN downloaded_at TO read_at;
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
@@ -176,6 +183,7 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (8, _SCHEMA_V8),
     (9, _SCHEMA_V9),
     (10, _SCHEMA_V10),
+    (11, _SCHEMA_V11),
 ]
 
 

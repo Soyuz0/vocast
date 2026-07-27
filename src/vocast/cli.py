@@ -61,7 +61,7 @@ LIST_TITLE_WIDTH = 60
 
 
 def _format_duration(seconds: float) -> str:
-    total = int(round(seconds))
+    total = round(seconds)
     hours, rem = divmod(total, 3600)
     minutes, secs = divmod(rem, 60)
     if hours:
@@ -212,6 +212,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         ["tailscale", "status", "--json"],
         capture_output=True,
         text=True,
+        check=False,  # the returncode is inspected below
     )
     if status_proc.returncode != 0:
         print("[ ] Tailscale daemon not reachable.")
@@ -248,6 +249,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         ["tailscale", "serve", "status", "--json"],
         capture_output=True,
         text=True,
+        check=False,  # the returncode is inspected below
     )
     if serve_proc.returncode == 0 and serve_proc.stdout.strip():
         try:

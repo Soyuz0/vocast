@@ -41,11 +41,11 @@ def repos(tmp_path: Path):
 def test_undownload_puts_the_episode_back_in_the_feeds(repos):
     _, entries, consumption, entry = repos
     consumption.record_download("ep-1")
-    assert entries.get(entry.id).downloaded_at is not None
+    assert entries.get(entry.id).read_at is not None
 
-    consumption.clear_download(entry.id)
+    consumption.set_read(entry.id, read=False)
 
-    assert entries.get(entry.id).downloaded_at is None
+    assert entries.get(entry.id).read_at is None
 
 
 def test_undownload_clears_the_upstream_read_mark_too(repos):
@@ -55,7 +55,7 @@ def test_undownload_clears_the_upstream_read_mark_too(repos):
     consumption.record_download("ep-1")
     consumption.mark_read_upstream(entry.id)
 
-    consumption.clear_download(entry.id)
+    consumption.set_read(entry.id, read=False)
 
     assert entries.get(entry.id).marked_read_at is None
 
@@ -67,7 +67,7 @@ def test_undownload_lifts_the_ignored_status(repos):
     consumption.record_download("ep-1")
     entries.set_status(entry.id, EntryStatus.IGNORED)
 
-    consumption.clear_download(entry.id)
+    consumption.set_read(entry.id, read=False)
 
     assert entries.get(entry.id).status is EntryStatus.READY
 
@@ -87,7 +87,7 @@ def test_undownload_leaves_an_unnarrated_entry_alone(repos):
     )
     entries.set_status(other.id, EntryStatus.IGNORED)
 
-    consumption.clear_download(other.id)
+    consumption.set_read(other.id, read=False)
 
     assert entries.get(other.id).status is EntryStatus.IGNORED
 
@@ -95,7 +95,7 @@ def test_undownload_leaves_an_unnarrated_entry_alone(repos):
 def test_undownloading_an_unknown_entry_reports_nothing(repos):
     _, _, consumption, _ = repos
 
-    assert consumption.clear_download(9999) is None
+    assert consumption.set_read(9999, read=False) is None
 
 
 class RecordingFetcher:
@@ -153,3 +153,65 @@ def test_marking_read_still_adds_the_tag():
     _writer(fetcher).mark_read("guid-1")
 
     assert "a=user%2F-%2Fstate%2Fcom.google%2Fread" in fetcher.bodies[-1]
+
+
+def test_marking_read_sets_the_marker(repos):
+    _, entries, consumption, entry = repos
+
+    consumption.set_read(entry.id, read=True)
+
+    assert entries.get(entry.id).read_at is not None
+
+
+def test_read_state_follows_the_reader_when_an_article_is_read_there(repos):
+    """The reader is the authority: an article read there should leave the feed
+    even though its audio was never fetched."""
+    _, entries, _, entry = repos
+
+    marked, cleared = entries.sync_read_upstream(entry.source_id, unread_guids=set())
+
+    assert (marked, cleared) == (1, 0)
+    assert entries.get(entry.id).read_at is not None
+
+
+def test_read_state_follows_the_reader_back_to_unread(repos):
+    """Marking an article unread in the reader brings the episode back."""
+    _, entries, consumption, entry = repos
+    consumption.set_read(entry.id, read=True)
+
+    marked, cleared = entries.sync_read_upstream(
+        entry.source_id, unread_guids={entry.external_guid}
+    )
+
+    assert (marked, cleared) == (0, 1)
+    assert entries.get(entry.id).read_at is None
+
+
+def test_syncing_leaves_entries_that_already_agree(repos):
+    """No write, so updated_at is not churned on every poll."""
+    _, entries, _, entry = repos
+
+    assert entries.sync_read_upstream(
+        entry.source_id, unread_guids={entry.external_guid}
+    ) == (0, 0)
+
+
+def test_syncing_covers_articles_that_were_never_narrated(repos):
+    """read_at describes the article, not the episode. A comic that failed to
+    narrate can still have been read, and showing it unread because no audio
+    exists contradicts the reader."""
+    _, entries, _, _ = repos
+    failed = entries.insert_if_new(
+        FeedEntry(
+            source_id=1,
+            external_guid="guid-comic",
+            title="A comic",
+            article_url="https://example.com/comic",
+            published_at=utcnow(),
+        )
+    )
+    entries.set_status(failed.id, EntryStatus.FAILED)
+
+    entries.sync_read_upstream(1, unread_guids=set())
+
+    assert entries.get(failed.id).read_at is not None

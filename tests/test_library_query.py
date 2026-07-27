@@ -43,7 +43,7 @@ def library_data(tmp_path: Path):
         published_offset: int,
         duration: int,
         status: EntryStatus = EntryStatus.READY,
-        downloaded: bool = False,
+        read: bool = False,
     ):
         entry = entries.insert_if_new(
             FeedEntry(
@@ -70,10 +70,10 @@ def library_data(tmp_path: Path):
                     "UPDATE entries SET duration_seconds = ? WHERE id = ?",
                     (duration, entry.id),
                 )
-        if downloaded:
+        if read:
             with db.transaction() as conn:
                 conn.execute(
-                    "UPDATE entries SET downloaded_at = ? WHERE id = ?",
+                    "UPDATE entries SET read_at = ? WHERE id = ?",
                     (to_iso(now), entry.id),
                 )
         return entry
@@ -95,7 +95,7 @@ def library_data(tmp_path: Path):
         author="Grace Hopper",
         published_offset=-1,
         duration=1200,
-        downloaded=True,
+        read=True,
     )
     gamma = add(
         second_source.id,
@@ -144,7 +144,7 @@ def test_source_and_origin_filters(library_data):
     assert [item.title for item in by_origin.items] == ["Beta release"]
 
 
-def test_status_queue_and_download_filters(library_data):
+def test_status_queue_and_read_filters(library_data):
     _, service, *_ = library_data
     assert [item.title for item in service.search(LibraryQuery(queued=True)).items] == [
         "Beta release"
@@ -156,7 +156,7 @@ def test_status_queue_and_download_filters(library_data):
         "Gamma notes",
     }
     assert [
-        item.title for item in service.search(LibraryQuery(downloaded=True)).items
+        item.title for item in service.search(LibraryQuery(read=True)).items
     ] == ["Beta release"]
     assert [
         item.title

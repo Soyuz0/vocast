@@ -332,7 +332,7 @@ def test_library_is_open_when_no_token_is_configured(
 
 @pytest.mark.parametrize(
     "query",
-    ["status=unknown", "queued=maybe", "downloaded=maybe", "published_after=nope"],
+    ["status=unknown", "queued=maybe", "read=maybe", "published_after=nope"],
 )
 def test_invalid_library_filters_return_clear_errors(client: TestClient, query: str):
     response = client.get(f"/library?{query}")
@@ -602,3 +602,49 @@ def test_a_link_posts_episode_points_at_the_post_not_the_target(
 
     assert "https://daringfireball.net/linked/2026/07/24/a-post" in body
     assert "https://articles.example.com/read?one=1&amp;two=2" not in body
+
+
+def test_read_control_is_present_at_both_breakpoints(
+    client: TestClient, context: AppContext
+):
+    """The desktop status cell is hidden on mobile, so the mobile row carries
+    its own control rather than leaving the marker unreachable on a phone."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert 'class="linkish" type="button" data-read-toggle' in body
+    assert 'class="dl" type="button" data-read-toggle' in body
+
+
+def test_read_control_reflects_the_current_state(
+    client: TestClient, context: AppContext
+):
+    entry = _add_entry(context)
+    context.consumption.set_read(entry.id, read=True)
+
+    body = client.get("/library").text
+
+    assert body.count('data-read="true"') == 4  # two controls, state and aria
+    assert ">mark read</button>" not in body
+
+
+def test_unnarrated_entries_still_carry_a_read_control(
+    client: TestClient, context: AppContext
+):
+    """An article can be read in the reader whether or not it ever narrated,
+    and a comic that failed is exactly the case that must not look unread."""
+    _add_entry(context, status=EntryStatus.FAILED)
+
+    assert 'type="button" data-read-toggle' in client.get("/library").text
+
+
+def test_library_filters_on_read_state(client: TestClient, context: AppContext):
+    read = _add_entry(context, title="Already read")
+    _add_entry(context, title="Still unread")
+    context.consumption.set_read(read.id, read=True)
+
+    unread_page = client.get("/library?read=no").text
+    read_page = client.get("/library?read=yes").text
+
+    assert "Still unread" in unread_page and "Already read" not in unread_page
+    assert "Already read" in read_page and "Still unread" not in read_page

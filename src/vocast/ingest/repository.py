@@ -25,7 +25,7 @@ _SOURCE_COLUMNS = """
 _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
     origin_name, origin_image_url, status, vocast_episode_id, content_hash,
-    duration_seconds, audio_bytes, downloaded_at, marked_read_at, feed_content,
+    duration_seconds, audio_bytes, read_at, marked_read_at, feed_content,
     post_url, progress_done, progress_total, retry_count, next_retry_at,
     claimed_at, error_message, created_at, updated_at
 """
@@ -583,7 +583,7 @@ class EntryRepository:
         *,
         source_id: int | None = None,
         limit: int | None = None,
-        hide_downloaded_before: datetime | None = None,
+        hide_read_before: datetime | None = None,
     ) -> list[PublishedEpisode]:
         """Ready episodes joined to their source, newest first.
 
@@ -603,11 +603,11 @@ class EntryRepository:
         if source_id is not None:
             clauses.append("e.source_id = ?")
             params.append(source_id)
-        if hide_downloaded_before is not None:
+        if hide_read_before is not None:
             # Downloaded long enough ago to assume it has been heard. The audio
             # stays on disk; it just stops being advertised.
-            clauses.append("(e.downloaded_at IS NULL OR e.downloaded_at > ?)")
-            params.append(to_iso(hide_downloaded_before))
+            clauses.append("(e.read_at IS NULL OR e.read_at > ?)")
+            params.append(to_iso(hide_read_before))
         with self._db.reading() as conn:
             rows = conn.execute(
                 f"""
@@ -730,6 +730,62 @@ class EntryRepository:
                 )
                 ignored += cur.rowcount
         return ignored
+
+    def sync_read_upstream(
+        self, source_id: int, unread_guids: set[str]
+    ) -> tuple[int, int]:
+        """Align read_at with the reader, in both directions. Returns (read, unread).
+
+        Every entry is covered, whatever its state. read_at describes the
+        article, not the episode: a comic that failed to narrate can still have
+        been read, and showing it as unread because no audio exists contradicts
+        the reader. ignore_read_upstream is complementary rather than an
+        alternative -- it stops a read article being narrated, this records that
+        it was read.
+
+        Requires a *complete* set of upstream unread guids: from a partial
+        fetch, absence would wrongly mark most of the backlog read.
+
+        Marking read here does not write back to the reader. The reader is the
+        authority for this direction, and echoing its own state to it would be
+        pointless traffic.
+        """
+        now = to_iso(utcnow())
+        marked = cleared = 0
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, external_guid, read_at FROM entries
+                WHERE source_id = ?
+                """,
+                (source_id,),
+            ).fetchall()
+            to_mark = [
+                r["id"]
+                for r in rows
+                if r["read_at"] is None and r["external_guid"] not in unread_guids
+            ]
+            to_clear = [
+                r["id"]
+                for r in rows
+                if r["read_at"] is not None and r["external_guid"] in unread_guids
+            ]
+            for ids, value in ((to_mark, now), (to_clear, None)):
+                for start in range(0, len(ids), 500):
+                    batch = ids[start : start + 500]
+                    placeholders = ",".join("?" * len(batch))
+                    cur = conn.execute(
+                        f"""
+                        UPDATE entries SET read_at = ?, updated_at = ?
+                        WHERE id IN ({placeholders})
+                        """,
+                        (value, now, *batch),
+                    )
+                    if value is None:
+                        cleared += cur.rowcount
+                    else:
+                        marked += cur.rowcount
+        return marked, cleared
 
     def tracked_episode_ids(self) -> set[str]:
         """Every episode id this database knows about, whatever its state.
@@ -891,11 +947,11 @@ class PlaylistRepository:
         slug: str,
         *,
         limit: int | None = None,
-        hide_downloaded_before: datetime | None = None,
+        hide_read_before: datetime | None = None,
     ) -> list[PlaylistEpisode]:
         """Ready playlist items in queue order, with feed provenance.
 
-        hide_downloaded_before drops episodes fetched a while ago, matching the
+        hide_read_before drops episodes fetched a while ago, matching the
         combined feed: an episode is consumed once, wherever it was fetched
         from, so it should retire from every feed rather than lingering in
         whichever one it was not downloaded through.
@@ -915,8 +971,8 @@ class PlaylistRepository:
                 JOIN sources s ON s.id = e.source_id
                 WHERE p.slug = ? AND e.status = ?
                   AND e.vocast_episode_id IS NOT NULL
-                  AND (? IS NULL OR e.downloaded_at IS NULL
-                       OR e.downloaded_at > ?)
+                  AND (? IS NULL OR e.read_at IS NULL
+                       OR e.read_at > ?)
                 ORDER BY pe.position IS NULL, pe.position ASC,
                          pe.added_at DESC, pe.entry_id DESC
                 {"LIMIT ?" if limit is not None else ""}
@@ -924,8 +980,8 @@ class PlaylistRepository:
                 (
                     slug,
                     EntryStatus.READY.value,
-                    to_iso(hide_downloaded_before),
-                    to_iso(hide_downloaded_before),
+                    to_iso(hide_read_before),
+                    to_iso(hide_read_before),
                     *((limit,) if limit is not None else ()),
                 ),
             ).fetchall()
@@ -1040,7 +1096,7 @@ class ConsumptionRepository:
         hand and fetching it a second time is a deliberate act, and the first
         download should not permanently suppress the response to it.
 
-        downloaded_at keeps the *first* fetch, since it drives how long an
+        read_at keeps the *first* fetch, since it drives how long an
         episode stays listed and that clock should not restart.
         """
         now = utcnow()
@@ -1053,7 +1109,7 @@ class ConsumptionRepository:
                 return None
             conn.execute(
                 """
-                UPDATE entries SET downloaded_at = COALESCE(downloaded_at, ?)
+                UPDATE entries SET read_at = COALESCE(read_at, ?)
                 WHERE vocast_episode_id = ?
                 """,
                 (to_iso(now), episode_id),
@@ -1066,13 +1122,13 @@ class ConsumptionRepository:
             ).fetchone()
         return Entry.from_row(entry) if entry else None
 
-    def clear_download(self, entry_id: int) -> Entry | None:
-        """Undo a download, putting the episode back in the feeds.
+    def set_read(self, entry_id: int, *, read: bool) -> Entry | None:
+        """Mark an entry read or unread.
 
-        Clears marked_read_at alongside downloaded_at so a later download marks
-        the article read upstream again, and lifts the ignored status that read
-        reconciliation applies, which is the state an accidental download most
-        often leaves behind.
+        Marking unread clears marked_read_at too, so a later download tells the
+        reader again rather than being suppressed by the debounce, and lifts the
+        ignored status that read reconciliation applies, which is what an
+        accidental download usually leaves behind.
         """
         with self._db.transaction() as conn:
             row = conn.execute(
@@ -1081,20 +1137,26 @@ class ConsumptionRepository:
             ).fetchone()
             if row is None:
                 return None
+            now = to_iso(utcnow())
             restore = (
-                row["status"] == EntryStatus.IGNORED.value
+                not read
+                and row["status"] == EntryStatus.IGNORED.value
                 and row["vocast_episode_id"] is not None
             )
+            # marked_read_at is cleared either way: it debounces the marking
+            # done while serving audio, and a deliberate change here should not
+            # suppress that later.
             conn.execute(
                 f"""
                 UPDATE entries
-                SET downloaded_at = NULL, marked_read_at = NULL,
+                SET read_at = ?, marked_read_at = NULL,
                     {"status = ?," if restore else ""} updated_at = ?
                 WHERE id = ?
                 """,
                 (
+                    now if read else None,
                     *((EntryStatus.READY.value,) if restore else ()),
-                    to_iso(utcnow()),
+                    now,
                     entry_id,
                 ),
             )
