@@ -576,3 +576,23 @@ def test_a_normal_article_has_no_permalink_recorded():
     [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
 
     assert entry.post_url is None
+
+
+def test_a_broken_host_is_corrected_on_ingestion():
+    """The real feeds arrive through this adapter, so the rewrite has to happen
+    here and not only for direct RSS sources."""
+    api = FakeAPI(
+        [{"items": [_item("v", href="https://vitalik.ca/general/2026/06/29/x.html")]}]
+    )
+
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+
+    assert entry.article_url == "https://vitalik.eth.limo/general/2026/06/29/x.html"
+
+
+def test_an_unaffected_host_is_ingested_unchanged():
+    api = FakeAPI([{"items": [_item("a", href="https://example.com/article")]}])
+
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+
+    assert entry.article_url == "https://example.com/article"

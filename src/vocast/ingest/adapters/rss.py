@@ -13,6 +13,7 @@ import feedparser
 
 from ..models import FeedEntry, Source
 from ..nethttp import FetchPolicy, basic_auth_header, fetch
+from ..urlfix import corrected_url
 from .base import FeedParseError
 
 Fetcher = Callable[..., Any]
@@ -125,7 +126,7 @@ class GenericRSSAdapter:
             source_id=self._source.id,
             external_guid=_entry_guid(item, article_url),
             title=_entry_title(item),
-            article_url=article_url,
+            article_url=corrected_url(article_url),
             published_at=_entry_published(item),
             author=_first_string(item, "author"),
             summary=_first_string(item, "summary", "description"),

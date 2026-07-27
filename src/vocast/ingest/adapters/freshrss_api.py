@@ -27,6 +27,7 @@ from typing import Any
 
 from ..models import FeedEntry, Source
 from ..nethttp import FetchError, FetchPolicy, fetch
+from ..urlfix import corrected_url
 from .base import FeedParseError
 
 #: Google Reader stream and state identifiers.
@@ -353,7 +354,7 @@ class FreshRSSAPIAdapter:
     def _to_entry(self, item: Any) -> FeedEntry | None:
         if not isinstance(item, dict):
             return None
-        article_url = _alternate_href(item)
+        article_url = corrected_url(_alternate_href(item))
         if not article_url:
             return None
         guid = item.get("id")
@@ -371,7 +372,9 @@ class FreshRSSAPIAdapter:
             origin_name=_origin_name(item),
             origin_image_url=self._icon_for(item),
             feed_content=own_text,
-            post_url=self._post_url(item, article_url) if own_text else None,
+            post_url=(
+                corrected_url(self._post_url(item, article_url)) if own_text else None
+            ),
         )
 
     def _own_text(self, item: dict[str, Any], article_url: str) -> str | None:
