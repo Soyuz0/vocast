@@ -591,15 +591,21 @@ class EntryRepository:
         broken by descending entry id, so the feed never reshuffles between
         requests.
         """
-        # `processing` is included when an episode already exists: that is a
-        # re-narration in place, and its current audio stays valid until the new
-        # version is swapped in. Excluding it would blank the episode from the
-        # feed for the duration.
+        # `pending` and `processing` are included when an episode already
+        # exists: that is a re-narration in place, and the current audio stays
+        # valid until the new version is swapped in. Excluding them blanks the
+        # episode from the feed from the moment it is requeued until the new
+        # audio lands, which under newest-first ordering can be days, and
+        # clients report the gap as the publisher withdrawing the episode.
         clauses = [
-            "(e.status = ? OR e.status = ?)",
+            "e.status IN (?, ?, ?)",
             "e.vocast_episode_id IS NOT NULL",
         ]
-        params: list[Any] = [EntryStatus.READY.value, EntryStatus.PROCESSING.value]
+        params: list[Any] = [
+            EntryStatus.READY.value,
+            EntryStatus.PROCESSING.value,
+            EntryStatus.PENDING.value,
+        ]
         if source_id is not None:
             clauses.append("e.source_id = ?")
             params.append(source_id)
@@ -969,7 +975,7 @@ class PlaylistRepository:
                 JOIN playlists p ON p.id = pe.playlist_id
                 JOIN entries e ON e.id = pe.entry_id
                 JOIN sources s ON s.id = e.source_id
-                WHERE p.slug = ? AND e.status = ?
+                WHERE p.slug = ? AND e.status IN (?, ?, ?)
                   AND e.vocast_episode_id IS NOT NULL
                   AND (? IS NULL OR e.read_at IS NULL
                        OR e.read_at > ?)
@@ -980,6 +986,8 @@ class PlaylistRepository:
                 (
                     slug,
                     EntryStatus.READY.value,
+                    EntryStatus.PROCESSING.value,
+                    EntryStatus.PENDING.value,
                     to_iso(hide_read_before),
                     to_iso(hide_read_before),
                     *((limit,) if limit is not None else ()),

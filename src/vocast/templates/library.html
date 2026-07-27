@@ -640,7 +640,11 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
     play(buttons[0].dataset.episode, buttons[0].dataset.title);
   });
 
-  // ---- feed URL, with the token when one is configured
+  // ---- feed URL. Deliberately without the feed token: this page is
+  // unauthenticated on the tailnet, so embedding the token would hand the
+  // public feed's secret to anyone who can reach the library. The copied URL
+  // works as-is over the tailnet, and an internet subscription needs the token
+  // added by hand.
   Array.prototype.forEach.call(document.querySelectorAll('[data-copy-feed]'), function (button) {
     button.addEventListener('click', async function () {
       var url = location.origin + basePath + '/feeds/'

@@ -648,6 +648,37 @@ def test_small_range_probe_is_not_a_download(
     assert context.entries.get(downloadable).read_at is None
 
 
+def test_a_suffix_range_probe_is_not_a_download(
+    client: TestClient, context: AppContext, downloadable
+):
+    """"bytes=-1024" asks for the last kilobyte, which is how a client reads
+    trailing tags. It was treated as a full download because the first offset is
+    empty, marking the article read -- and read upstream -- without it being
+    fetched."""
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3", headers={"Range": "bytes=-1024"})
+
+    assert context.entries.get(downloadable).read_at is None
+
+
+def test_an_open_ended_range_is_a_download(
+    client: TestClient, context: AppContext, downloadable
+):
+    """"bytes=0-" is the whole file, not a probe."""
+    client.get("/audio/20260604T120000Z_a_aaa1.mp3", headers={"Range": "bytes=0-"})
+
+    assert context.entries.get(downloadable).read_at is not None
+
+
+def test_a_large_suffix_range_is_a_download(
+    client: TestClient, context: AppContext, downloadable
+):
+    client.get(
+        "/audio/20260604T120000Z_a_aaa1.mp3", headers={"Range": "bytes=-9999999"}
+    )
+
+    assert context.entries.get(downloadable).read_at is not None
+
+
 def test_download_time_is_not_overwritten_by_a_refetch(
     client: TestClient, context: AppContext, downloadable
 ):
@@ -864,3 +895,70 @@ def test_recent_feed_keeps_a_just_downloaded_episode_during_the_grace(
     context.consumption.record_download("20260604T120000Z_a_aaa0")
 
     assert "Article 0" in client.get("/feeds/recent.xml").text
+
+
+# --- requeued episodes stay listed ------------------------------------------
+
+
+def test_a_requeued_episode_stays_in_the_feed(context: AppContext):
+    """Its existing audio is still valid until the new version is swapped in.
+    Dropping it the moment it is requeued withdraws it for as long as the queue
+    takes, which under newest-first ordering can be days."""
+    _ready_entries(context, 1)
+    client = TestClient(create_app(ServiceState(context=context)))
+    assert len(_feed_items(client)) == 1
+
+    context.entries.requeue(1)
+
+    assert len(_feed_items(client)) == 1
+
+
+def test_a_requeued_episode_stays_in_the_listen_later_feed(context: AppContext):
+    _ready_entries(context, 1)
+    context.playlists.add_entry("listen-later", 1)
+    client = TestClient(create_app(ServiceState(context=context)))
+    assert client.get("/feeds/listen-later.xml").text.count("<item>") == 1
+
+    context.entries.requeue(1)
+
+    assert client.get("/feeds/listen-later.xml").text.count("<item>") == 1
+
+
+def test_an_entry_never_narrated_is_not_listed_while_pending(context: AppContext):
+    """Only a re-narration may be listed while queued; there is nothing to serve
+    for an article that has never been synthesized."""
+    source = context.sources.add(
+        name="Fresh", kind="rss", url="https://example.com/fresh.xml"
+    )
+    context.entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="never",
+            title="Never narrated",
+            article_url="https://example.com/never",
+            published_at=utcnow(),
+        )
+    )
+    client = TestClient(create_app(ServiceState(context=context)))
+
+    assert _feed_items(client) == []
+
+
+def test_the_legacy_alias_retires_read_episodes_like_the_feed_it_aliases(
+    context: AppContext, downloadable
+):
+    """The alias exists for long-standing subscribers, so it must not keep
+    listing what the combined feed has retired."""
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, hide_after_read_hours=24),
+    )
+    client = TestClient(create_app(ServiceState(context=context)))
+    with context.db.transaction() as conn:
+        conn.execute(
+            "UPDATE entries SET read_at = ? WHERE id = ?",
+            ("2020-01-01T00:00:00+00:00", downloadable),
+        )
+
+    assert client.get("/feeds/all.xml").text.count("<item>") == 0
+    assert client.get("/feed.xml").text.count("<item>") == 0

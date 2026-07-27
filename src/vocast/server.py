@@ -120,7 +120,15 @@ def _is_probe(request: Request) -> bool:
     span = request.headers.get("range", "")
     if not span.startswith("bytes="):
         return False
-    first, _, last = span[len("bytes=") :].partition("-")
+    first, separator, last = span[len("bytes=") :].partition("-")
+    if not separator:
+        return False
+    if not first:
+        # A suffix range, "bytes=-1024": the last N bytes, which is how a client
+        # reads trailing tags. Small ones are probes like any other.
+        return last.isdigit() and int(last) < 65536
+    if not last:
+        return False  # open-ended from an offset: the rest of the file
     if not first.isdigit() or not last.isdigit():
         return False
     return (int(last) - int(first)) < 65536
@@ -158,6 +166,10 @@ def _render_all(
         audio_base_url=audio_base,
         token=token,
         max_items=max_items,
+        # Without this the alias keeps listing episodes the combined feed has
+        # retired, so the two disagree for exactly the long-standing
+        # subscribers the alias exists to serve.
+        hide_read_before=state.hide_read_before() if state is not None else None,
     )
     cover = with_token(f"{base_url}/cover.jpg", token) if _SHOW_COVER else None
     return build_podcast_rss(
