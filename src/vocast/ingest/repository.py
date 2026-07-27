@@ -1066,6 +1066,43 @@ class ConsumptionRepository:
             ).fetchone()
         return Entry.from_row(entry) if entry else None
 
+    def clear_download(self, entry_id: int) -> Entry | None:
+        """Undo a download, putting the episode back in the feeds.
+
+        Clears marked_read_at alongside downloaded_at so a later download marks
+        the article read upstream again, and lifts the ignored status that read
+        reconciliation applies, which is the state an accidental download most
+        often leaves behind.
+        """
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT id, status, vocast_episode_id FROM entries WHERE id = ?",
+                (entry_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            restore = (
+                row["status"] == EntryStatus.IGNORED.value
+                and row["vocast_episode_id"] is not None
+            )
+            conn.execute(
+                f"""
+                UPDATE entries
+                SET downloaded_at = NULL, marked_read_at = NULL,
+                    {"status = ?," if restore else ""} updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    *((EntryStatus.READY.value,) if restore else ()),
+                    to_iso(utcnow()),
+                    entry_id,
+                ),
+            )
+            updated = conn.execute(
+                f"SELECT {_ENTRY_COLUMNS} FROM entries WHERE id = ?", (entry_id,)
+            ).fetchone()
+        return Entry.from_row(updated) if updated else None
+
     def mark_read_upstream(self, entry_id: int) -> None:
         with self._db.transaction() as conn:
             conn.execute(

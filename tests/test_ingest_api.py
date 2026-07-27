@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -466,6 +467,7 @@ def tokened_client(context: AppContext) -> TestClient:
     [
         "/feed.xml",
         "/feeds/all.xml",
+        "/feeds/recent.xml",
         "/feeds/listen-later.xml",
         "/audio/20260604T120000Z_a_aaa1.mp3",
     ],
@@ -481,6 +483,7 @@ def test_feed_and_audio_require_the_token_from_the_internet(
     [
         "/feed.xml",
         "/feeds/all.xml",
+        "/feeds/recent.xml",
         "/feeds/listen-later.xml",
         "/audio/20260604T120000Z_a_aaa1.mp3",
     ],
@@ -497,6 +500,7 @@ def test_feed_and_audio_are_open_on_the_tailnet(tokened_client: TestClient, path
     [
         "/feed.xml",
         "/feeds/all.xml",
+        "/feeds/recent.xml",
         "/feeds/listen-later.xml",
         "/audio/20260604T120000Z_a_aaa1.mp3",
     ],
@@ -759,3 +763,104 @@ def test_repeated_requests_during_one_download_mark_read_once(
 
 def test_download_of_an_unknown_episode_is_ignored(context: AppContext):
     assert context.consumption.record_download("no-such-episode") is None
+
+
+# --- recent feed -----------------------------------------------------------
+
+
+def _ready_entries(context: AppContext, count: int) -> None:
+    source = context.sources.add(
+        name="Bulk", kind="rss", url="https://example.com/bulk.xml"
+    )
+    for n in range(count):
+        entry = context.entries.insert_if_new(
+            FeedEntry(
+                source_id=source.id,
+                external_guid=f"guid-{n}",
+                title=f"Article {n}",
+                article_url=f"https://example.com/{n}",
+                published_at=utcnow() - timedelta(minutes=n),
+            )
+        )
+        episode_id = f"20260604T1200{n:02d}Z_a_aaa{n}"
+        context.entries.mark_ready(entry.id, episode_id=episode_id)
+        _make_episode(context.config.storage.library_path, episode_id, f"Article {n}")
+
+
+def _client_with_recent_limit(context: AppContext, limit: int) -> TestClient:
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, recent_feed_items=limit),
+    )
+    return TestClient(create_app(ServiceState(context=context)))
+
+
+def test_recent_feed_is_capped(context: AppContext):
+    """A client re-parses every item on each refresh, so carrying the whole
+    backlog makes the feed slow to pick up an addition."""
+    _ready_entries(context, 12)
+
+    body = _client_with_recent_limit(context, 5).get("/feeds/recent.xml").text
+
+    assert body.count("<item>") == 5
+
+
+def test_recent_feed_keeps_the_newest(context: AppContext):
+    _ready_entries(context, 8)
+
+    body = _client_with_recent_limit(context, 3).get("/feeds/recent.xml").text
+
+    assert "Article 0" in body
+    assert "Article 7" not in body
+
+
+def test_the_full_feed_is_not_capped_by_the_recent_limit(context: AppContext):
+    """The combined feed is still the complete archive."""
+    _ready_entries(context, 12)
+
+    body = _client_with_recent_limit(context, 3).get("/feeds/all.xml").text
+
+    assert body.count("<item>") == 12
+
+
+def test_recent_feed_drops_what_has_been_downloaded(context: AppContext):
+    """The feed answers what is still waiting to be heard.
+
+    It inherits the same grace period as the combined feed rather than dropping
+    an episode the instant it is fetched, so a client that is mid-download does
+    not see the item disappear underneath it.
+    """
+    _ready_entries(context, 3)
+    context.config = replace(
+        context.config,
+        server=replace(
+            context.config.server, recent_feed_items=10, hide_after_download_hours=24
+        ),
+    )
+    client = TestClient(create_app(ServiceState(context=context)))
+    with context.db.transaction() as conn:
+        conn.execute(
+            "UPDATE entries SET downloaded_at = ? WHERE vocast_episode_id = ?",
+            ("2020-01-01T00:00:00+00:00", "20260604T120000Z_a_aaa0"),
+        )
+
+    body = client.get("/feeds/recent.xml").text
+
+    assert "Article 0" not in body
+    assert "Article 1" in body
+
+
+def test_recent_feed_keeps_a_just_downloaded_episode_during_the_grace(
+    context: AppContext,
+):
+    _ready_entries(context, 3)
+    context.config = replace(
+        context.config,
+        server=replace(
+            context.config.server, recent_feed_items=10, hide_after_download_hours=24
+        ),
+    )
+    client = TestClient(create_app(ServiceState(context=context)))
+    context.consumption.record_download("20260604T120000Z_a_aaa0")
+
+    assert "Article 0" in client.get("/feeds/recent.xml").text

@@ -93,6 +93,10 @@ class ServerConfig:
     #: nor reliably handle tens of thousands of items, and every item costs a
     #: metadata read. None means no limit.
     feed_max_items: int | None = 300
+    #: Size of the recents feed. Small on purpose: podcast clients re-parse the
+    #: whole document on every refresh, so a feed holding the entire backlog is
+    #: slow to update even when almost nothing in it has changed.
+    recent_feed_items: int = 100
 
 
 @dataclass(frozen=True)
@@ -314,6 +318,11 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 server.get("hide_after_download_hours"),
                 ServerConfig.hide_after_download_hours,
                 "server.hide_after_download_hours",
+            ),
+            recent_feed_items=_as_int(
+                server.get("recent_feed_items"),
+                ServerConfig.recent_feed_items,
+                "server.recent_feed_items",
             ),
             feed_max_items=_as_optional_int(
                 server.get("feed_max_items"),

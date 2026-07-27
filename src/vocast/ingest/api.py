@@ -104,6 +104,32 @@ class ServiceState:
             self.context.consumption.mark_read_upstream,
         )
 
+    def clear_download(self, entry_id: int) -> tuple[bool, bool]:
+        """Undo a download. Returns (found, still marked read upstream).
+
+        Unlike record_download this runs from a deliberate click, so the upstream
+        call is synchronous: if FreshRSS refuses, read reconciliation would quietly
+        re-ignore the entry on the next full poll, and the listener should hear
+        about that now rather than notice the episode vanish tomorrow.
+        """
+        entry = self.context.consumption.clear_download(entry_id)
+        if entry is None:
+            return False, False
+        source = self.context.sources.get(entry.source_id)
+        if source is None or source.kind != SourceKind.FRESHRSS_API.value:
+            return True, False
+        try:
+            FreshRSSWriter(source, policy=self.context.fetch_policy()).mark_unread(
+                entry.external_guid
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the caller
+            log.warning(
+                "could not mark article unread upstream %s",
+                kv(entry_id=entry_id, error=exc),
+            )
+            return True, True
+        return True, False
+
     def audio_base_url(self, request: Request) -> str:
         """Where enclosures should point, which may differ from the feed host."""
         configured = self.context.config.server.audio_base_url
@@ -159,6 +185,24 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
         state.require_feed_token(request, token)
         return _render_feed(state, request, source_id=None)
 
+    @router.api_route("/feeds/recent.xml", methods=["GET", "HEAD"])
+    def recent_feed(request: Request, token: str | None = None) -> Response:
+        """The newest handful of episodes still waiting to be heard.
+
+        The combined feed carries the whole backlog, and a podcast client
+        re-parses every item on each refresh, so it is slow to pick up an
+        addition. This one stays small enough to refresh quickly.
+        """
+        state.require_feed_token(request, token)
+        return _render_feed(
+            state,
+            request,
+            source_id=None,
+            title="vocast \u2014 Recent",
+            description="The newest narrated articles, not yet downloaded",
+            max_items=state.context.config.server.recent_feed_items,
+        )
+
     @router.api_route("/feeds/source/{source_id}.xml", methods=["GET", "HEAD"])
     def source_feed(
         source_id: int, request: Request, token: str | None = None
@@ -202,6 +246,9 @@ def _render_feed(
     *,
     source_id: int | None,
     source_name: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    max_items: int | None = None,
 ) -> Response:
     base = state.base_url(request)
     episodes = collect_episodes(
@@ -210,11 +257,15 @@ def _render_feed(
         source_id=source_id,
         audio_base_url=state.audio_base_url(request),
         token=state.feed_token,
-        max_items=state.context.config.server.feed_max_items,
+        max_items=(
+            max_items
+            if max_items is not None
+            else state.context.config.server.feed_max_items
+        ),
         hide_downloaded_before=state.hide_downloaded_before(),
     )
-    title = f"vocast — {source_name}" if source_name else "vocast"
-    description = (
+    title = title or (f"vocast — {source_name}" if source_name else "vocast")
+    description = description or (
         f"Articles from {source_name}, narrated"
         if source_name
         else "Self-hosted articles-as-podcasts"
@@ -402,6 +453,16 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
     # on a page you already authenticated to is friction without a threat model.
     # Same-origin is still enforced, and the administrative endpoints are
     # unchanged.
+    # Same reasoning as the Listen Later buttons below: undoing a download is
+    # ordinary use of an already-gated page, not an administrative action.
+    @router.post("/api/entries/{entry_id}/undownload")
+    def undownload_entry(entry_id: int, request: Request) -> JSONResponse:
+        _require_same_origin(state, request)
+        found, upstream_failed = state.clear_download(entry_id)
+        if not found:
+            raise HTTPException(404, "unknown entry")
+        return JSONResponse({"entry_id": entry_id, "upstream_failed": upstream_failed})
+
     @router.post("/api/playlists/listen-later/entries/{entry_id}")
     def add_listen_later(entry_id: int, request: Request) -> JSONResponse:
         _require_same_origin(state, request)

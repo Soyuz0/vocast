@@ -61,11 +61,26 @@ class FreshRSSWriter:
         except FetchError as exc:
             raise FreshRSSWriteError(str(exc)) from exc
 
+    def mark_unread(self, external_guid: str) -> None:
+        """Remove the read marker. Raises FreshRSSWriteError on failure.
+
+        Undoing a download has to reach upstream: read reconciliation ignores
+        anything no longer in the unread stream, so an entry left read in
+        FreshRSS would be dropped again on the next full poll.
+        """
+        try:
+            self._mark(external_guid, retry_on_stale_token=True, read=False)
+        except FetchError as exc:
+            raise FreshRSSWriteError(str(exc)) from exc
+
     # -- internals ---------------------------------------------------------
 
-    def _mark(self, guid: str, *, retry_on_stale_token: bool) -> None:
+    def _mark(
+        self, guid: str, *, retry_on_stale_token: bool, read: bool = True
+    ) -> None:
+        # "a" adds the tag, "r" removes it; the endpoint is otherwise identical.
         body = urllib.parse.urlencode(
-            {"a": READ_STATE, "i": guid, "T": self._write_token()}
+            {"a" if read else "r": READ_STATE, "i": guid, "T": self._write_token()}
         ).encode()
         url = f"{self._base()}/api/greader.php/reader/api/0/edit-tag"
         try:
@@ -84,13 +99,14 @@ class FreshRSSWriter:
             # A rejected token is indistinguishable from other 4xx here, so
             # discard both and try once with fresh credentials.
             self._auth = self._token = None
-            self._mark(guid, retry_on_stale_token=False)
+            self._mark(guid, retry_on_stale_token=False, read=read)
             return
 
         text = response.text().strip()
         if text.upper() != "OK":
             raise FreshRSSWriteError(
-                f"FreshRSS did not accept the read marker for {guid}: {text[:120]!r}"
+                f"FreshRSS did not accept the read marker change for {guid}: "
+                f"{text[:120]!r}"
             )
 
     def _client_auth(self) -> str:
