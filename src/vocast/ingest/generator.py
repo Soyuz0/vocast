@@ -31,11 +31,15 @@ log = get_logger("generator")
 MIN_ARTICLE_CHARS = 400
 
 
-def build_narration(title: str, byline: str | None, body: str) -> str:
-    """Compose what is actually read aloud: title, byline, then the article.
+def narration_parts(title: str, byline: str | None, body: str) -> tuple[str, str]:
+    """The spoken heading, and the body as it will actually be narrated.
 
     Extractors frequently repeat the headline as the article's first line, so a
-    leading line matching the title is dropped rather than narrated twice.
+    leading line matching the title is dropped rather than narrated twice. That
+    makes the narrated body differ from the extracted one, which is why callers
+    that need to work on the body must take it from here rather than reusing what
+    they passed in.
+
     Sentence-terminating punctuation is added so the chunker treats the intro as
     its own sentences instead of running it into the first paragraph.
     """
@@ -46,7 +50,13 @@ def build_narration(title: str, byline: str | None, body: str) -> str:
     intro = [_as_sentence(title)]
     if byline:
         intro.append(_as_sentence(f"by {byline}"))
-    return "\n\n".join([*intro, body.strip()])
+    return "\n\n".join(intro), body.strip()
+
+
+def build_narration(title: str, byline: str | None, body: str) -> str:
+    """Compose what is actually read aloud: title, byline, then the article."""
+    heading, spoken_body = narration_parts(title, byline, body)
+    return f"{heading}\n\n{spoken_body}"
 
 
 def _as_sentence(text: str) -> str:
@@ -177,8 +187,9 @@ class VocastEpisodeGenerator:
         voice = self._voice or engine.default_voice
 
         spoken_title = title or extracted_title or "untitled"
-        narration = build_narration(spoken_title, byline, text)
-        passages = self._passages(narration, text, quotes, voice)
+        heading, spoken_body = narration_parts(spoken_title, byline, text)
+        narration = f"{heading}\n\n{spoken_body}"
+        passages = self._passages(heading, spoken_body, quotes, voice)
 
         try:
             chunk = synthesize_passages(
@@ -246,27 +257,29 @@ class VocastEpisodeGenerator:
     # -- internals ---------------------------------------------------------
 
     def _passages(
-        self, narration: str, body: str, quotes: list[str], voice: str
+        self, heading: str, body: str, quotes: list[str], voice: str
     ) -> list[tuple[str, str]]:
         """Assign a voice to each run of the narration.
 
-        Only the body is examined for quotes: the heading this prepends names
-        the article and its publication, and must stay in the narrator's voice
-        even when the title is itself a quotation, which on a link blog it often
-        is. With no quote voice configured, or no quotes found, this collapses to
-        a single passage and synthesis is exactly as it was.
+        Takes the heading and body separately, already as narration_parts
+        produced them. An earlier version recovered the body by searching for it
+        inside the finished narration, which silently narrated the whole article
+        twice whenever the heading dedup had altered it: the search failed, and
+        the failure looked like "no heading" rather than "not found".
+
+        Only the body is examined for quotes. The heading names the article and
+        its publication and stays with the narrator even when the title is itself
+        a quotation, which on a link blog it often is.
         """
+        whole = f"{heading}\n\n{body}"
         if not self._quote_voice or not quotes:
-            return [(narration, voice)]
-        heading, _, spoken_body = narration.partition(body)
-        if not spoken_body and not heading:
-            return [(narration, voice)]
+            return [(whole, voice)]
         passages = [(heading, voice)] if heading.strip() else []
         passages.extend(
             (passage.text, self._quote_voice if passage.quoted else voice)
             for passage in split_quoted(body, quotes)
         )
-        return passages or [(narration, voice)]
+        return passages or [(whole, voice)]
 
     def _extract(self, url: str) -> tuple[str | None, str, str | None, list[str]]:
         try:

@@ -625,14 +625,16 @@ QUOTED_HTML = (
 
 
 class VoiceRecordingEngine(FakeEngine):
-    """Records which voice each chunk was synthesized with."""
+    """Records which voice each chunk was synthesized with, and what was said."""
 
     def __init__(self) -> None:
         super().__init__()
         self.voices: list[str | None] = []
+        self.spoken: list[str] = []
 
     def synthesize(self, text, voice=None):
         self.voices.append(voice)
+        self.spoken.append(text)
         return super().synthesize(text, voice=voice)
 
 
@@ -687,3 +689,65 @@ def _article_text(episode) -> str:
     return (Path(episode.audio_path).parent / "article.txt").read_text(
         encoding="utf-8"
     )
+
+
+DUPLICATE_HEADLINE_HTML = (
+    "<p>Liberal Worlds: James Bryce and the Democratic Intellect</p>"
+    "<p>" + ("Bryce wrote at length on the subject. " * 6) + "</p>"
+    "<blockquote><p>" + ("The democratic intellect is a curious thing. " * 6) + "</p>"
+    "</blockquote>"
+    "<p>" + ("That is the argument in brief. " * 6) + "</p>"
+)
+
+
+def test_an_article_repeating_its_headline_is_not_narrated_twice(lib: Path):
+    """Regression: the body was recovered by searching for it inside the finished
+    narration, but the heading dedup had already altered it, so the search failed
+    and the whole article was appended a second time -- once in the narrator's
+    voice, once with the quote voice."""
+    engine = VoiceRecordingEngine()
+
+    VocastEpisodeGenerator(
+        engine=engine, voice="af_heart", quote_voice="am_michael"
+    ).generate_from_url(
+        "https://example.com/a",
+        title="Liberal Worlds: James Bryce and the Democratic Intellect",
+        content_html=DUPLICATE_HEADLINE_HTML,
+    )
+
+    spoken = " ".join(engine.spoken)
+    assert spoken.count("That is the argument in brief.") == 6, "body read once"
+    assert spoken.count("The democratic intellect is a curious thing.") == 6
+
+
+def test_the_headline_is_still_dropped_when_the_body_repeats_it(lib: Path):
+    """The dedup itself must keep working: the title is spoken once, from the
+    heading, not again from the body."""
+    engine = VoiceRecordingEngine()
+
+    VocastEpisodeGenerator(
+        engine=engine, voice="af_heart", quote_voice="am_michael"
+    ).generate_from_url(
+        "https://example.com/a",
+        title="Liberal Worlds: James Bryce and the Democratic Intellect",
+        content_html=DUPLICATE_HEADLINE_HTML,
+    )
+
+    spoken = " ".join(engine.spoken)
+    assert spoken.count("Liberal Worlds: James Bryce") == 1
+
+
+def test_quote_voicing_survives_the_headline_dedup(lib: Path):
+    """The earlier failure mode silently fell back to one voice for these
+    articles; the quote must still be voiced separately."""
+    engine = VoiceRecordingEngine()
+
+    VocastEpisodeGenerator(
+        engine=engine, voice="af_heart", quote_voice="am_michael"
+    ).generate_from_url(
+        "https://example.com/a",
+        title="Liberal Worlds: James Bryce and the Democratic Intellect",
+        content_html=DUPLICATE_HEADLINE_HTML,
+    )
+
+    assert "am_michael" in engine.voices
