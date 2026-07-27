@@ -180,6 +180,9 @@ class FreshRSSConfig:
 class TTSConfig:
     engine: str = "kokoro"
     voice: str | None = None
+    #: Voice for block quotes, so a passage the author is quoting is audibly
+    #: someone else's words. Unset means one voice throughout.
+    quote_voice: str | None = None
 
 
 @dataclass(frozen=True)
@@ -435,6 +438,7 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
         tts=TTSConfig(
             engine=str(tts.get("engine", TTSConfig.engine)),
             voice=_as_optional_str(tts.get("voice")),
+            quote_voice=_as_optional_str(tts.get("quote_voice")),
         ),
         sources=tuple(_parse_sources(raw.get("sources"))),
         admin_token=_as_optional_str(raw.get("admin_token")),
@@ -532,6 +536,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_RETENTION_INCLUDE_MANUAL", "retention", "include_manual", "bool"),
     ("VOCAST_TTS_ENGINE", "tts", "engine", "str"),
     ("VOCAST_TTS_VOICE", "tts", "voice", "opt_str"),
+    ("VOCAST_TTS_QUOTE_VOICE", "tts", "quote_voice", "opt_str"),
     ("VOCAST_ADMIN_TOKEN", "", "admin_token", "opt_str"),
     ("VOCAST_LOG_LEVEL", "", "log_level", "upper"),
     ("VOCAST_ALLOW_PRIVATE_URLS", "", "allow_private_urls", "bool"),

@@ -78,6 +78,7 @@ def build_worker(context: AppContext) -> Worker:
     generator = VocastEpisodeGenerator(
         engine_name=context.config.tts.engine,
         voice=context.config.tts.voice,
+        quote_voice=context.config.tts.quote_voice,
         policy=context.fetch_policy(),
     )
     return Worker(

@@ -101,9 +101,9 @@ def stub_article(monkeypatch: pytest.MonkeyPatch):
 
     def fake_fetch_article(url, *, html_fetcher=None):
         fetched.append(url)
-        return f"Extracted {url}", ARTICLE_TEXT, None
+        return f"Extracted {url}", ARTICLE_TEXT, None, []
 
-    monkeypatch.setattr(generator_module, "fetch_article", fake_fetch_article)
+    monkeypatch.setattr(generator_module, "fetch_article_parts", fake_fetch_article)
     return fetched
 
 
@@ -262,9 +262,9 @@ def test_transient_failure_is_retried_then_succeeds(
         attempts.append(url)
         if len(attempts) == 1:
             raise FetchError("HTTP 503 Service Unavailable from " + url)
-        return "Recovered", ARTICLE_TEXT, None
+        return "Recovered", ARTICLE_TEXT, None, []
 
-    monkeypatch.setattr(generator_module, "fetch_article", flaky_fetch_article)
+    monkeypatch.setattr(generator_module, "fetch_article_parts", flaky_fetch_article)
     worker = _worker(context)
 
     first = worker.process_next()
@@ -292,9 +292,9 @@ def test_failed_entry_is_visible_and_can_be_retried_by_hand(
     ).poll_all()
 
     def paywalled(url, *, html_fetcher=None):
-        return "Paywall", "Subscribe to continue reading.", None
+        return "Paywall", "Subscribe to continue reading.", None, []
 
-    monkeypatch.setattr(generator_module, "fetch_article", paywalled)
+    monkeypatch.setattr(generator_module, "fetch_article_parts", paywalled)
     worker = _worker(context)
     outcome = worker.process_next()
 
@@ -308,8 +308,8 @@ def test_failed_entry_is_visible_and_can_be_retried_by_hand(
     # Once the article is readable, a manual retry produces the episode.
     monkeypatch.setattr(
         generator_module,
-        "fetch_article",
-        lambda url, *, html_fetcher=None: ("Now Readable", ARTICLE_TEXT, None),
+        "fetch_article_parts",
+        lambda url, *, html_fetcher=None: ("Now Readable", ARTICLE_TEXT, None, []),
     )
     assert client.post(f"/api/entries/{failed[0]['id']}/retry").status_code == 200
     assert worker.process_next().ok

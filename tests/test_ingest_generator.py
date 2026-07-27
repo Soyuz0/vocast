@@ -57,16 +57,16 @@ def _stub_extraction(
     cover: str | None = None,
 ):
     def fake_fetch_article(url, *, html_fetcher=None):
-        return title, text, cover
+        return title, text, cover, []
 
-    monkeypatch.setattr(generator_module, "fetch_article", fake_fetch_article)
+    monkeypatch.setattr(generator_module, "fetch_article_parts", fake_fetch_article)
 
 
 def _stub_extraction_raising(monkeypatch: pytest.MonkeyPatch, exc: Exception):
     def fake_fetch_article(url, *, html_fetcher=None):
         raise exc
 
-    monkeypatch.setattr(generator_module, "fetch_article", fake_fetch_article)
+    monkeypatch.setattr(generator_module, "fetch_article_parts", fake_fetch_article)
 
 
 # --- happy path ------------------------------------------------------------
@@ -307,9 +307,9 @@ def test_guarded_fetcher_is_used_for_article_html(
 
     def fake_fetch_article(url, *, html_fetcher=None):
         captured["fetcher"] = html_fetcher
-        return "T", ARTICLE_TEXT, None
+        return "T", ARTICLE_TEXT, None, []
 
-    monkeypatch.setattr(generator_module, "fetch_article", fake_fetch_article)
+    monkeypatch.setattr(generator_module, "fetch_article_parts", fake_fetch_article)
     seen: list[str] = []
     monkeypatch.setattr(
         generator_module,
@@ -579,7 +579,7 @@ def test_post_body_is_narrated_without_fetching_the_link(
     def explode(url, **kwargs):
         raise AssertionError("must not fetch the outbound link")
 
-    monkeypatch.setattr(generator_module, "fetch_article", explode)
+    monkeypatch.setattr(generator_module, "fetch_article_parts", explode)
     body = "<p>" + ("The author's own commentary here. " * 20) + "</p>"
 
     episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
@@ -611,3 +611,79 @@ def test_too_thin_a_post_body_fails_clearly(
         VocastEpisodeGenerator(engine=engine).generate_from_url(
             "https://elsewhere.example/x", content_html="<p>Too short.</p>"
         )
+
+
+# --- quote voice -----------------------------------------------------------
+
+
+QUOTED_HTML = (
+    "<p>Someone wrote, at their blog:</p>"
+    "<blockquote><p>" + ("The quoted argument runs on for a while. " * 8) + "</p>"
+    "</blockquote>"
+    "<p>" + ("And here is the commentary that follows it. " * 8) + "</p>"
+)
+
+
+class VoiceRecordingEngine(FakeEngine):
+    """Records which voice each chunk was synthesized with."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.voices: list[str | None] = []
+
+    def synthesize(self, text, voice=None):
+        self.voices.append(voice)
+        return super().synthesize(text, voice=voice)
+
+
+def test_a_block_quote_is_read_in_the_quote_voice(lib: Path):
+    engine = VoiceRecordingEngine()
+
+    VocastEpisodeGenerator(
+        engine=engine, voice="af_heart", quote_voice="am_michael"
+    ).generate_from_url("https://example.com/a", content_html=QUOTED_HTML)
+
+    assert "am_michael" in engine.voices
+    assert "af_heart" in engine.voices
+
+
+def test_the_heading_stays_in_the_narrator_voice(lib: Path):
+    """A link blog often quotes in its own headline; the title and publication
+    are the narrator speaking, whatever the article does."""
+    engine = VoiceRecordingEngine()
+
+    VocastEpisodeGenerator(
+        engine=engine, voice="af_heart", quote_voice="am_michael"
+    ).generate_from_url(
+        "https://example.com/a", title="'A Quoted Headline'", content_html=QUOTED_HTML
+    )
+
+    assert engine.voices[0] == "af_heart"
+
+
+def test_without_a_quote_voice_everything_uses_one_voice(lib: Path):
+    engine = VoiceRecordingEngine()
+
+    VocastEpisodeGenerator(engine=engine, voice="af_heart").generate_from_url(
+        "https://example.com/a", content_html=QUOTED_HTML
+    )
+
+    assert set(engine.voices) == {"af_heart"}
+
+
+def test_the_narrated_text_is_unchanged_by_quote_splitting(lib: Path):
+    """Quotes may only affect who reads a passage, never what is read."""
+    plain = VocastEpisodeGenerator(
+        engine=FakeEngine(), voice="af_heart"
+    ).generate_from_url("https://example.com/a", content_html=QUOTED_HTML)
+    split = VocastEpisodeGenerator(
+        engine=FakeEngine(), voice="af_heart", quote_voice="am_michael"
+    ).generate_from_url("https://example.com/b", content_html=QUOTED_HTML)
+
+    assert _article_text(split) == _article_text(plain)
+
+
+def _article_text(episode) -> str:
+    return (Path(episode.audio_path).parent / "article.txt").read_text(
+        encoding="utf-8"
+    )

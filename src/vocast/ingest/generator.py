@@ -17,8 +17,9 @@ import trafilatura
 
 from .. import library
 from ..engines import AudioChunk, TTSEngine, get_engine
-from ..fetch import fetch_article
-from ..pipeline import SynthesisCancelled, synthesize_article
+from ..fetch import fetch_article_parts
+from ..pipeline import SynthesisCancelled, synthesize_passages
+from ..quotes import quotes_from_xml, split_quoted
 from .logs import get_logger, kv
 from .nethttp import BlockedURLError, FetchError, FetchPolicy, fetch
 
@@ -139,6 +140,7 @@ class VocastEpisodeGenerator:
         min_chars: int = MIN_ARTICLE_CHARS,
         mp3_bitrate: str = "96k",
         should_continue: Callable[[], bool] | None = None,
+        quote_voice: str | None = None,
     ) -> None:
         self._engine_name = engine_name
         self._voice = voice
@@ -147,6 +149,7 @@ class VocastEpisodeGenerator:
         self._min_chars = min_chars
         self._mp3_bitrate = mp3_bitrate
         self._should_continue = should_continue
+        self._quote_voice = quote_voice
 
     def generate_from_url(
         self,
@@ -161,9 +164,11 @@ class VocastEpisodeGenerator:
     ) -> GeneratedEpisode:
         if content_html:
             # The post's own text, supplied because its link points elsewhere.
-            extracted_title, text, article_cover = self._from_html(content_html, url)
+            extracted_title, text, article_cover, quotes = self._from_html(
+                content_html, url
+            )
         else:
-            extracted_title, text, article_cover = self._extract(url)
+            extracted_title, text, article_cover, quotes = self._extract(url)
         # A supplied cover is the publication's own artwork, which keeps every
         # episode from a source visually consistent; the article's own image is
         # only a fallback.
@@ -173,12 +178,12 @@ class VocastEpisodeGenerator:
 
         spoken_title = title or extracted_title or "untitled"
         narration = build_narration(spoken_title, byline, text)
+        passages = self._passages(narration, text, quotes, voice)
 
         try:
-            chunk = synthesize_article(
-                narration,
+            chunk = synthesize_passages(
+                passages,
                 engine,
-                voice=voice,
                 progress=False,
                 should_continue=self._should_continue,
                 on_progress=on_progress,
@@ -240,9 +245,32 @@ class VocastEpisodeGenerator:
 
     # -- internals ---------------------------------------------------------
 
-    def _extract(self, url: str) -> tuple[str | None, str, str | None]:
+    def _passages(
+        self, narration: str, body: str, quotes: list[str], voice: str
+    ) -> list[tuple[str, str]]:
+        """Assign a voice to each run of the narration.
+
+        Only the body is examined for quotes: the heading this prepends names
+        the article and its publication, and must stay in the narrator's voice
+        even when the title is itself a quotation, which on a link blog it often
+        is. With no quote voice configured, or no quotes found, this collapses to
+        a single passage and synthesis is exactly as it was.
+        """
+        if not self._quote_voice or not quotes:
+            return [(narration, voice)]
+        heading, _, spoken_body = narration.partition(body)
+        if not spoken_body and not heading:
+            return [(narration, voice)]
+        passages = [(heading, voice)] if heading.strip() else []
+        passages.extend(
+            (passage.text, self._quote_voice if passage.quoted else voice)
+            for passage in split_quoted(body, quotes)
+        )
+        return passages or [(narration, voice)]
+
+    def _extract(self, url: str) -> tuple[str | None, str, str | None, list[str]]:
         try:
-            extracted_title, text, cover_url = fetch_article(
+            extracted_title, text, cover_url, quotes = fetch_article_parts(
                 url, html_fetcher=self._fetch_html
             )
         except BlockedURLError as exc:
@@ -260,22 +288,26 @@ class VocastEpisodeGenerator:
                 f"{self._min_chars} character minimum; the page is probably a "
                 "paywall, consent screen, or navigation stub rather than an article"
             )
-        return extracted_title, cleaned, cover_url
+        return extracted_title, cleaned, cover_url, quotes
 
     def _from_html(
         self, content_html: str, url: str
-    ) -> tuple[str | None, str, str | None]:
+    ) -> tuple[str | None, str, str | None, list[str]]:
         """Extract narratable text from a feed entry's own body.
 
         Run through the same extractor as a web page so the cleanup rules match:
         code blocks stripped, boilerplate dropped, paragraphs preserved.
         """
+        document = f"<html><body>{content_html}</body></html>"
+        options = {
+            "include_comments": False,
+            "include_tables": False,
+            "prune_xpath": ["//pre"],
+        }
         try:
-            extracted = trafilatura.extract(
-                f"<html><body>{content_html}</body></html>",
-                include_comments=False,
-                include_tables=False,
-                prune_xpath=["//pre"],
+            extracted = trafilatura.extract(document, **options)
+            quotes = quotes_from_xml(
+                trafilatura.extract(document, output_format="xml", **options)
             )
         except Exception as exc:
             raise PermanentGenerationError(
@@ -288,7 +320,7 @@ class VocastEpisodeGenerator:
                 f"the post body for {url} yielded only {len(cleaned)} characters, "
                 f"below the {self._min_chars} character minimum"
             )
-        return None, cleaned, None
+        return None, cleaned, None, quotes
 
     def _fetch_html(self, url: str) -> str:
         return fetch(url, policy=self._policy).text()

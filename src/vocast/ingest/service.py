@@ -168,6 +168,7 @@ class Service:
         generator = VocastEpisodeGenerator(
             engine_name=self.context.config.tts.engine,
             voice=self.context.config.tts.voice,
+            quote_voice=self.context.config.tts.quote_voice,
             policy=self.context.fetch_policy(),
             # Checked between chunks, so pausing interrupts a long article
             # instead of waiting out what can be hours of synthesis.

@@ -11,6 +11,8 @@ from collections.abc import Callable
 
 import trafilatura
 
+from .quotes import quotes_from_xml
+
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -53,15 +55,33 @@ def fetch_article(
     urllib path used by `vocast add`; the long-running service passes a fetcher
     that enforces size caps and refuses private addresses.
     """
+    title, text, cover_image_url, _ = fetch_article_parts(
+        url, html_fetcher=html_fetcher
+    )
+    return title, text, cover_image_url
+
+
+def fetch_article_parts(
+    url: str,
+    *,
+    html_fetcher: Callable[[str], str] | None = None,
+) -> tuple[str | None, str, str | None, list[str]]:
+    """As fetch_article, plus the text of any block quotes the page contains.
+
+    The quotes come from a second pass over the same HTML in the extractor's
+    structured format, which marks them. The narrated text is still the plain
+    output, unchanged, so quotes can only ever affect which voice reads a
+    passage, never what is read.
+    """
     html = (html_fetcher or _fetch_html)(url)
 
+    options = {
+        "include_comments": False,
+        "include_tables": False,
+        "prune_xpath": ["//pre"],
+    }
     result = trafilatura.extract(
-        html,
-        output_format="json",
-        with_metadata=True,
-        include_comments=False,
-        include_tables=False,
-        prune_xpath=["//pre"],
+        html, output_format="json", with_metadata=True, **options
     )
     if result is None:
         raise ValueError(f"could not extract content from {url}")
@@ -74,4 +94,5 @@ def fetch_article(
     if not text:
         raise ValueError(f"extracted empty content from {url}")
 
-    return title, text, cover_image_url
+    quotes = quotes_from_xml(trafilatura.extract(html, output_format="xml", **options))
+    return title, text, cover_image_url, quotes
