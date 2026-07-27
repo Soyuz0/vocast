@@ -175,6 +175,10 @@ class FreshRSSConfig:
     #: default: it changes state in another application, and a client that
     #: downloads eagerly would mark things read before you hear them.
     mark_read_on_download: bool = False
+    #: Shortest gap between read-state pulls triggered by viewing the library.
+    #: The page reloads on every filter and page change; none of those is a
+    #: reason to ask the reader again. The refresh button ignores this.
+    read_sync_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -438,6 +442,11 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 freshrss.get("mark_read_on_download"),
                 FreshRSSConfig.mark_read_on_download,
                 "freshrss.mark_read_on_download",
+            ),
+            read_sync_seconds=_as_int(
+                freshrss.get("read_sync_seconds"),
+                FreshRSSConfig.read_sync_seconds,
+                "freshrss.read_sync_seconds",
             ),
         ),
         tts=TTSConfig(

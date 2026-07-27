@@ -7,8 +7,10 @@ Mounted onto the existing vocast FastAPI app, so `/feed.xml` and
 from __future__ import annotations
 
 import secrets
+import threading
+import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -46,6 +48,56 @@ class ServiceState:
     context: AppContext
     worker_running: bool = False
     poller_running: bool = False
+    _last_read_sync: float = field(default=0.0, repr=False)
+    _read_sync_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def sync_read_state(self, *, force: bool = False) -> tuple[int, int]:
+        """Pull the reader's read flags. Returns (marked read, marked unread).
+
+        Called when the library is viewed, so what is on screen matches the
+        reader without waiting for the daily poll. Throttled because the page
+        reloads on every filter and page change, and none of those are a reason
+        to ask FreshRSS again; the refresh button forces it, which is the case
+        where the listener has just changed something and wants to see it.
+
+        Never raises: this decorates a page, and a reader outage must not stop
+        the library rendering.
+        """
+        interval = self.context.config.freshrss.read_sync_seconds
+        now = time.monotonic()
+        if not self._read_sync_lock.acquire(blocking=force):
+            return 0, 0
+        try:
+            if not force and now - self._last_read_sync < interval:
+                return 0, 0
+            self._last_read_sync = now
+            return self._pull_read_state()
+        except Exception:
+            log.warning("could not pull read state from the reader", exc_info=True)
+            return 0, 0
+        finally:
+            self._read_sync_lock.release()
+
+    def _pull_read_state(self) -> tuple[int, int]:
+        from .adapters.freshrss_api import FreshRSSAPIAdapter
+
+        totals = [0, 0]
+        for source in self.context.sources.all():
+            if source.kind != SourceKind.FRESHRSS_API.value or not source.enabled:
+                continue
+            adapter = FreshRSSAPIAdapter(source, policy=self.context.fetch_policy())
+            unread, complete = adapter.unread_guids()
+            if not complete:
+                # Absence would otherwise read as "read" for most of the backlog.
+                log.info(
+                    "skipping read sync, upstream id list was incomplete %s",
+                    kv(source_id=source.id),
+                )
+                continue
+            marked, cleared = self.context.entries.sync_read_upstream(source.id, unread)
+            totals[0] += marked
+            totals[1] += cleared
+        return totals[0], totals[1]
 
     def require_feed_token(self, request: Request, supplied: str | None) -> None:
         """Reject internet requests for feeds or audio without the token.
@@ -468,6 +520,18 @@ def _register_admin(router: APIRouter, state: ServiceState) -> None:
     # on a page you already authenticated to is friction without a threat model.
     # Same-origin is still enforced, and the administrative endpoints are
     # unchanged.
+    @router.post("/api/read-sync")
+    def force_read_sync(request: Request) -> JSONResponse:
+        """Pull read state now, ignoring the throttle.
+
+        The refresh button calls this: the listener has just changed something
+        in the reader and is asking to see it, which is exactly the case the
+        throttle should not apply to.
+        """
+        _require_same_origin(state, request)
+        marked, cleared = state.sync_read_state(force=True)
+        return JSONResponse({"marked_read": marked, "marked_unread": cleared})
+
     # Same reasoning as the Listen Later buttons below: changing what you have
     # read is ordinary use of an already-gated page, not an administrative act.
     @router.post("/api/entries/{entry_id}/read")

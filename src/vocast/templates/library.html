@@ -734,9 +734,20 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
   });
 
   // ---- refresh: the list is server-rendered, so a reload is the whole story
+  // Pull read state from the reader before reloading, so pressing refresh
+  // after marking things read there shows the result rather than the state
+  // from the last throttled pull. A failure still reloads: the page is the
+  // point, the sync is a courtesy.
   Array.prototype.forEach.call(document.querySelectorAll('[data-refresh]'), function (button) {
-    button.addEventListener('click', function () {
+    button.addEventListener('click', async function () {
       button.disabled = true;
+      try {
+        await fetch(basePath + '/api/read-sync', {
+          method: 'POST', credentials: 'same-origin'
+        });
+      } catch (error) {
+        /* offline or the reader is down; reload anyway */
+      }
       location.reload();
     });
   });

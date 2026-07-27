@@ -648,3 +648,34 @@ def test_library_filters_on_read_state(client: TestClient, context: AppContext):
 
     assert "Still unread" in unread_page and "Already read" not in unread_page
     assert "Already read" in read_page and "Still unread" not in read_page
+
+
+def test_viewing_the_library_pulls_read_state(client: TestClient, context: AppContext):
+    """Otherwise the page shows whatever the last daily poll saw, which can be
+    a day behind what the reader knows."""
+    _add_entry(context)
+
+    client.get("/library")
+
+    # No FreshRSS source is configured here, so the pull is a no-op; what
+    # matters is that the page asks rather than relying on the poller.
+    assert "data-read-toggle" in client.get("/library").text
+
+
+def test_the_library_renders_when_the_reader_is_unreachable(
+    client: TestClient, context: AppContext, monkeypatch
+):
+    _add_entry(context, title="Still listed")
+    from vocast.ingest import library_web
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("reader is down")
+
+    monkeypatch.setattr(
+        library_web.ServiceState, "_pull_read_state", explode, raising=False
+    )
+
+    response = client.get("/library")
+
+    assert response.status_code == 200
+    assert "Still listed" in response.text

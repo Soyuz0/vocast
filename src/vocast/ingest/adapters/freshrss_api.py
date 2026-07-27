@@ -245,6 +245,70 @@ class FreshRSSAPIAdapter:
         guids = [e.external_guid for e in entries]
         return len(guids) - len(self._known_guids(guids))
 
+    def unread_guids(self, page_size: int = 20000) -> tuple[set[str], bool]:
+        """Every unread article's guid, and whether the set is complete.
+
+        Uses the ids endpoint rather than walking contents: the whole unread
+        stream comes back in one request of a few hundred KB, where fetching
+        the articles themselves is minutes of paging. That is what makes it
+        affordable to check on a page load.
+
+        The completeness flag matters more than the ids: acting on a partial
+        set would read an article's absence as "read" and mark most of the
+        backlog read.
+        """
+        config = self._source.config or {}
+        username = config.get("username")
+        password = config.get("api_password") or config.get("password")
+        if not username or not password:
+            raise FeedParseError("FreshRSS API credentials are not configured")
+        token = self._client_login(str(username), str(password))
+
+        guids: set[str] = set()
+        continuation: str | None = None
+        complete = False
+        for _ in range(20):  # bounded, so a broken cursor cannot loop forever
+            payload = self._request_ids(token, page_size, continuation)
+            for ref in payload.get("itemRefs") or []:
+                identifier = ref.get("id") if isinstance(ref, dict) else None
+                if identifier is not None:
+                    guids.add(_long_form_guid(str(identifier)))
+            continuation = payload.get("continuation")
+            if not continuation:
+                complete = True
+                break
+        return guids, complete
+
+    def _request_ids(
+        self, token: str, page_size: int, continuation: str | None
+    ) -> dict[str, Any]:
+        config = self._source.config or {}
+        stream = str(config.get("stream", READING_LIST))
+        params: list[tuple[str, str]] = [
+            ("s", stream),
+            ("xt", READ_STATE),
+            ("n", str(page_size)),
+            ("output", "json"),
+        ]
+        if continuation:
+            params.append(("c", continuation))
+        url = (
+            f"{self._base()}/api/greader.php/reader/api/0/stream/items/ids"
+            f"?{urllib.parse.urlencode(params)}"
+        )
+        try:
+            response = self._fetcher(
+                url,
+                policy=self._policy,
+                headers={"Authorization": f"GoogleLogin auth={token}"},
+            )
+            payload = json.loads(response.text())
+        except (FetchError, json.JSONDecodeError) as exc:
+            raise FeedParseError(f"FreshRSS id request failed: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise FeedParseError("FreshRSS returned an unexpected payload shape")
+        return payload
+
     def _request_page(
         self, token: str, page_size: int, continuation: str | None
     ) -> dict[str, Any]:
@@ -370,6 +434,18 @@ class FreshRSSAPIAdapter:
 
     def _base(self) -> str:
         return self._source.url.rstrip("/")
+
+
+def _long_form_guid(identifier: str) -> str:
+    """The guid form entries are stored under.
+
+    The ids endpoint returns the short decimal form while stream contents
+    returns the long tag form, and the two must be comparable. A value that is
+    already long form is left alone.
+    """
+    if identifier.startswith("tag:"):
+        return identifier
+    return f"tag:google.com,2005:reader/item/{int(identifier):016x}"
 
 
 def _alternate_href(item: dict[str, Any]) -> str | None:

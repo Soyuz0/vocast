@@ -215,3 +215,69 @@ def test_syncing_covers_articles_that_were_never_narrated(repos):
     entries.sync_read_upstream(1, unread_guids=set())
 
     assert entries.get(failed.id).read_at is not None
+
+
+# --- pulling read state when the library is viewed --------------------------
+
+
+def _state(interval: int = 60):
+    """A ServiceState with only the config the throttle consults."""
+    from types import SimpleNamespace
+
+    from vocast.ingest.api import ServiceState
+
+    return ServiceState(
+        context=SimpleNamespace(
+            config=SimpleNamespace(freshrss=SimpleNamespace(read_sync_seconds=interval))
+        )
+    )
+
+
+def test_viewing_the_library_pulls_read_state_at_most_once_per_interval(monkeypatch):
+    """The page reloads on every filter and page change, and none of those is a
+    reason to ask the reader again."""
+    state = _state()
+    calls = []
+    monkeypatch.setattr(
+        state, "_pull_read_state", lambda: calls.append(1) or (0, 0), raising=False
+    )
+
+    state.sync_read_state()
+    state.sync_read_state()
+    state.sync_read_state()
+
+    assert len(calls) == 1
+
+
+def test_forcing_bypasses_the_throttle(monkeypatch):
+    """The refresh button means the listener has just changed something in the
+    reader and is asking to see it."""
+    state = _state()
+    calls = []
+    monkeypatch.setattr(
+        state, "_pull_read_state", lambda: calls.append(1) or (0, 0), raising=False
+    )
+
+    state.sync_read_state()
+    state.sync_read_state(force=True)
+
+    assert len(calls) == 2
+
+
+def test_a_reader_outage_does_not_break_the_page(monkeypatch):
+    """This decorates a page; a reader outage must not stop it rendering."""
+    state = _state()
+
+    def explode():
+        raise RuntimeError("reader is down")
+
+    monkeypatch.setattr(state, "_pull_read_state", explode, raising=False)
+
+    assert state.sync_read_state(force=True) == (0, 0)
+
+
+def test_counts_are_reported_back(monkeypatch):
+    state = _state()
+    monkeypatch.setattr(state, "_pull_read_state", lambda: (3, 2), raising=False)
+
+    assert state.sync_read_state(force=True) == (3, 2)

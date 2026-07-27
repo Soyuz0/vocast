@@ -63,6 +63,9 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
             redirect = _require_library_token(state, request, token)
             if redirect is not None:
                 return redirect
+        # Bring the read flags in line before querying, so the page agrees with
+        # the reader rather than with whatever the last daily poll saw.
+        state.sync_read_state()
         query = LibraryQuery(
             search=search,
             source_id=_optional_int(source_id, "source_id"),
