@@ -679,3 +679,41 @@ def test_the_library_renders_when_the_reader_is_unreachable(
 
     assert response.status_code == 200
     assert "Still listed" in response.text
+
+
+def test_dates_include_the_year(client: TestClient, context: AppContext):
+    """The library spans several years of backlog, where a bare "Jul 18" says
+    nothing about which July."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert utcnow().strftime("%b %d, %Y") in body
+
+
+def test_the_mobile_row_carries_the_date_and_length(
+    client: TestClient, context: AppContext
+):
+    """The desktop keeps these in columns that are hidden on mobile, so without
+    a copy inside the mobile group they are unreachable on a phone."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    mobile_group = body.split('class="mobstatus"')[1].split("</span>\n            <span")[0]
+    assert utcnow().strftime("%b %d, %Y") in mobile_group
+
+
+def test_the_read_toggle_appears_once_per_breakpoint(
+    client: TestClient, context: AppContext
+):
+    """It used to render twice on desktop: the mobile copy sat outside the group
+    that hides it, so both were visible at once."""
+    _add_entry(context)
+    body = client.get("/library").text
+    row = body.split('class="row"')[1].split("</li>")[0]
+
+    before_group, _, after_group = row.partition('class="mobstatus"')
+    mobile_part, _, desktop_part = after_group.partition('class="statuscell"')
+
+    assert "data-read-toggle" not in before_group
+    assert mobile_part.count("data-read-toggle") == 1, "one inside the mobile group"
+    assert desktop_part.count("data-read-toggle") == 1, "one in the desktop column"

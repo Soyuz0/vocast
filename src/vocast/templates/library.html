@@ -170,7 +170,10 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
 /* The row badge carries status on wide screens; on mobile it moves inline with
    the byline, where there is no room for a separate column. */
 .mobstatus{display:none;align-items:center;gap:6px}
-@media (max-width:860px){.mobstatus{display:inline-flex}}
+/* Holds what the desktop keeps in its own columns: status, date, length and the
+   read toggle. Those columns are hidden on mobile, so without this the
+   information simply would not be reachable on a phone. */
+@media (max-width:860px){.mobstatus{display:inline-flex;flex-wrap:wrap}}
 .meta{font-family:var(--font-mono);font-size:12px;color:var(--text-grey);text-align:right;white-space:nowrap}
 .play{width:36px;height:36px;flex:none;border-radius:50%;cursor:pointer;border:1px solid var(--color-purple-main);
   background:var(--bg-purple);color:var(--color-purple-light);font-size:13px}
@@ -493,16 +496,20 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
             {% if item.author %}<span class="sep">&middot;</span><span>{{ item.author }}</span>{% endif %}
             {% if item.source_name != item.origin_name %}
             <span class="sep">&middot;</span><span>via {{ item.source_name }}</span>{% endif %}
-            <span class="sep">&middot;</span>
             <span class="mobstatus">
+              <span class="sep">&middot;</span>
               <span class="dot-status {{ item.status.value }}" aria-hidden="true"></span>{{ item.status.value }}{% if pct %} {{ pct }}%{% endif %}
+              {% if item.published_at %}
+              <span class="sep">&middot;</span>{{ item.published_at.strftime('%b %d, %Y') }}{% endif %}
+              {% if item.duration_seconds %}
+              <span class="sep">&middot;</span>{{ (item.duration_seconds / 60) | round | int }} min{% endif %}
+              <span class="sep">&middot;</span>
+              <button class="linkish" type="button" data-read-toggle
+                      data-entry-id="{{ item.entry_id }}"
+                      data-read="{{ 'true' if item.read_at else 'false' }}"
+                      aria-pressed="{{ 'true' if item.read_at else 'false' }}">{{
+                'read' if item.read_at else 'mark read' }}</button>
             </span>
-            <span class="sep">&middot;</span>
-            <button class="linkish" type="button" data-read-toggle
-                    data-entry-id="{{ item.entry_id }}"
-                    data-read="{{ 'true' if item.read_at else 'false' }}"
-                    aria-pressed="{{ 'true' if item.read_at else 'false' }}">{{
-              'read' if item.read_at else 'mark read' }}</button>
             <span class="sep">&middot;</span>
             <a href="{{ item.article_url }}" target="_blank" rel="noopener noreferrer">Original</a>
           </div>
@@ -524,7 +531,7 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
             'read' if item.read_at else 'mark read' }}</button>
         </div>
         <div class="meta">
-          {% if item.published_at %}{{ item.published_at.strftime('%b %d') }}{% else %}&mdash;{% endif %}
+          {% if item.published_at %}{{ item.published_at.strftime('%b %d, %Y') }}{% else %}&mdash;{% endif %}
           {% if item.duration_seconds %}<br>{{ (item.duration_seconds / 60) | round | int }} min{% endif %}
         </div>
         {% if item.episode_id %}
