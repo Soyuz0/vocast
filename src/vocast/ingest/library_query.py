@@ -97,17 +97,34 @@ class LibraryOrigin:
 
 @dataclass(frozen=True)
 class LibraryFacets:
-    """Counts for the navigation, over the whole library.
+    """Counts for the navigation.
 
-    Deliberately not narrowed by the active filters: these numbers double as
-    navigation, and a count that moved every time you typed in the search box
-    would be useless for deciding where to go next.
+    Publication counts are narrowed by the active filters, so with a status of
+    ready selected each publication reports how many ready episodes it has rather
+    than how many articles exist in total. Its own publication filter is excluded
+    from that narrowing, otherwise selecting one would report every other as zero
+    and there would be no way to switch between them.
+
+    The status counts and totals stay global on purpose: those double as the
+    primary navigation, and a queue size that shrank whenever a publication was
+    selected would no longer answer "how much is left to narrate".
     """
 
     total: int
     queued: int
     by_status: dict[str, int]
     origins: list[LibraryOrigin]
+
+
+# Needed wherever the queued filter might apply, which is any query built from
+# _filters, since that clause refers to pe.entry_id.
+_PLAYLIST_JOIN = """
+    LEFT JOIN playlist_entries pe
+      ON pe.entry_id = e.id
+     AND pe.playlist_id = (
+         SELECT id FROM playlists WHERE slug = 'listen-later'
+     )
+"""
 
 
 class LibraryQueryService:
@@ -124,13 +141,7 @@ class LibraryQueryService:
         normalized = self._normalize(query)
         clauses, params = self._filters(normalized)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        playlist_join = """
-            LEFT JOIN playlist_entries pe
-              ON pe.entry_id = e.id
-             AND pe.playlist_id = (
-                 SELECT id FROM playlists WHERE slug = 'listen-later'
-             )
-        """
+        playlist_join = _PLAYLIST_JOIN
         with self._db.reading() as conn:
             total = conn.execute(
                 f"""
@@ -193,8 +204,13 @@ class LibraryQueryService:
             LibraryOrigin(id=row["origin_id"], name=row["origin_name"]) for row in rows
         ]
 
-    def facets(self) -> LibraryFacets:
-        """Navigation counts: totals, queue size, statuses and publications."""
+    def facets(self, query: LibraryQuery | None = None) -> LibraryFacets:
+        """Navigation counts. Pass the active query to narrow publications.
+
+        Called with no query, publication counts cover the whole library, which
+        is what the API wants; the library page passes its query so the sidebar
+        agrees with what is on screen.
+        """
         with self._db.reading() as conn:
             total = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
             queued = conn.execute(
@@ -210,6 +226,13 @@ class LibraryQueryService:
                     "SELECT status, COUNT(*) AS n FROM entries GROUP BY status"
                 )
             }
+            origin_clauses = [f"{_ORIGIN_EXPRESSION} != ''"]
+            origin_params: list[Any] = []
+            if query is not None:
+                extra, origin_params = self._filters(
+                    self._normalize(query), ignore=frozenset({"origin_id"})
+                )
+                origin_clauses.extend(extra)
             origins = [
                 LibraryOrigin(
                     id=row["origin_id"], name=row["origin_name"], count=row["n"]
@@ -219,10 +242,13 @@ class LibraryQueryService:
                     SELECT UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION})) AS origin_id,
                            MIN({_ORIGIN_EXPRESSION}) AS origin_name,
                            COUNT(*) AS n
-                    FROM entries e JOIN sources s ON s.id = e.source_id
-                    WHERE {_ORIGIN_EXPRESSION} != ''
+                    FROM entries e
+                    JOIN sources s ON s.id = e.source_id
+                    {_PLAYLIST_JOIN}
+                    WHERE {" AND ".join(origin_clauses)}
                     GROUP BY UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION}))
-                    """
+                    """,
+                    tuple(origin_params),
                 )
             ]
         origins.sort(key=lambda origin: alphabetical_key(origin.name))
@@ -246,7 +272,15 @@ class LibraryQueryService:
             ),
         )
 
-    def _filters(self, query: LibraryQuery) -> tuple[list[str], list[Any]]:
+    def _filters(
+        self, query: LibraryQuery, *, ignore: frozenset[str] = frozenset()
+    ) -> tuple[list[str], list[Any]]:
+        """Build the WHERE clauses for a query.
+
+        ignore drops one dimension, which is what a facet needs: counting
+        publications under the active publication filter would report every other
+        publication as zero and make it impossible to switch between them.
+        """
         clauses: list[str] = []
         params: list[Any] = []
         if query.search:
@@ -261,7 +295,7 @@ class LibraryQueryService:
         if query.source_id is not None:
             clauses.append("e.source_id = ?")
             params.append(query.source_id)
-        if query.origin_id:
+        if query.origin_id and "origin_id" not in ignore:
             clauses.append(f"UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION})) = ?")
             params.append(query.origin_id)
         if query.status is not None:

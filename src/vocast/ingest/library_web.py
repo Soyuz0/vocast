@@ -96,7 +96,7 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
             .render(
                 page=result,
                 sources=service.sources(),
-                facets=service.facets(),
+                facets=service.facets(query),
                 statuses=list(EntryStatus),
                 current_query=current_query,
                 pagination_query=urlencode(current_query),

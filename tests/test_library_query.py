@@ -312,3 +312,60 @@ def test_accented_publications_sort_under_their_base_letter():
         "Ørsted",
         "Zebra",
     ]
+
+
+def test_publication_counts_follow_the_active_filter(library_data):
+    """A count that ignores the filter contradicts the list beside it: with
+    failed selected, a publication showing 12 that yields one row is misleading."""
+    service = library_data[1]
+
+    unfiltered = {o.name: o.count for o in service.facets().origins}
+    ready_only = {
+        o.name: o.count
+        for o in service.facets(LibraryQuery(status=EntryStatus.READY)).origins
+    }
+
+    assert unfiltered["Direct Publication"] == 1
+    assert "Direct Publication" not in ready_only
+    assert ready_only["The Daily Planet"] == 1
+
+
+def test_selecting_a_publication_leaves_the_others_countable(library_data):
+    """A facet must exclude its own dimension, or every other publication reads
+    zero and there is no way to switch."""
+    service = library_data[1]
+
+    origins = service.facets(LibraryQuery(origin_id="the daily planet")).origins
+    counts = {o.name: o.count for o in origins}
+
+    assert counts["The Daily Planet"] == 1
+    assert counts["Science Weekly"] == 1
+
+
+def test_search_narrows_publication_counts(library_data):
+    service = library_data[1]
+
+    origins = service.facets(LibraryQuery(search="Alpha systems")).origins
+
+    assert {o.name: o.count for o in origins} == {"The Daily Planet": 1}
+
+
+def test_queue_filter_narrows_publication_counts(library_data):
+    """The queued clause needs the playlist join, which the facet query must
+    carry too or the SQL refers to a table it never joined."""
+    service = library_data[1]
+
+    origins = service.facets(LibraryQuery(queued=True)).origins
+
+    assert {o.name: o.count for o in origins} == {"Science Weekly": 1}
+
+
+def test_status_counts_stay_global_while_publications_narrow(library_data):
+    """Status counts are navigation: they answer how much is left overall, so
+    they must not shrink when a publication is selected."""
+    service = library_data[1]
+
+    facets = service.facets(LibraryQuery(origin_id="the daily planet"))
+
+    assert facets.by_status == service.facets().by_status
+    assert facets.total == service.facets().total
