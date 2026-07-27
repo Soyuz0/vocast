@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -158,6 +158,13 @@ ALTER TABLE entries ADD COLUMN progress_done INTEGER;
 ALTER TABLE entries ADD COLUMN progress_total INTEGER;
 """
 
+# A link post's own permalink. article_url holds the outbound link, which is
+# what gets fetched when there is no body to narrate, so the permalink needs a
+# column of its own rather than overwriting it.
+_SCHEMA_V10 = """
+ALTER TABLE entries ADD COLUMN post_url TEXT;
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
@@ -168,6 +175,7 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (7, _SCHEMA_V7),
     (8, _SCHEMA_V8),
     (9, _SCHEMA_V9),
+    (10, _SCHEMA_V10),
 ]
 
 

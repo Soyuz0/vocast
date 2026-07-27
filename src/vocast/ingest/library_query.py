@@ -159,7 +159,8 @@ class LibraryQueryService:
             normalized = replace(normalized, page=min(normalized.page, last_page))
             rows = conn.execute(
                 f"""
-                SELECT e.id, e.vocast_episode_id, e.title, e.author, e.article_url,
+                SELECT e.id, e.vocast_episode_id, e.title, e.author,
+                       COALESCE(e.post_url, e.article_url) AS article_url,
                        e.source_id, s.name AS source_name,
                        {_ORIGIN_EXPRESSION} AS origin_name,
                        UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION})) AS origin_id,

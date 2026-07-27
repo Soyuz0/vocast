@@ -584,3 +584,21 @@ def test_selecting_a_publication_on_mobile_filters_the_list(
 
     assert "Kept" in body
     assert "Dropped" not in body
+
+
+def test_a_link_posts_episode_points_at_the_post_not_the_target(
+    client: TestClient, context: AppContext
+):
+    """The narration is the link blogger's own commentary, so "Original" must
+    lead to that post; the outbound link is a different article entirely."""
+    entry = _add_entry(context, title="A link post")
+    with context.db.transaction() as conn:
+        conn.execute(
+            "UPDATE entries SET post_url = ? WHERE id = ?",
+            ("https://daringfireball.net/linked/2026/07/24/a-post", entry.id),
+        )
+
+    body = client.get("/library").text
+
+    assert "https://daringfireball.net/linked/2026/07/24/a-post" in body
+    assert "https://articles.example.com/read?one=1&amp;two=2" not in body

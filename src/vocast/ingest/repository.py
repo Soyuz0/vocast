@@ -26,8 +26,8 @@ _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
     origin_name, origin_image_url, status, vocast_episode_id, content_hash,
     duration_seconds, audio_bytes, downloaded_at, marked_read_at, feed_content,
-    progress_done, progress_total, retry_count, next_retry_at, claimed_at,
-    error_message, created_at, updated_at
+    post_url, progress_done, progress_total, retry_count, next_retry_at,
+    claimed_at, error_message, created_at, updated_at
 """
 
 
@@ -309,8 +309,8 @@ class EntryRepository:
                 INSERT INTO entries (
                     source_id, external_guid, article_url, title, author,
                     published_at, origin_name, origin_image_url, feed_content,
-                    status, retry_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    post_url, status, retry_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(source_id, external_guid) DO NOTHING
                 """,
                 (
@@ -323,6 +323,7 @@ class EntryRepository:
                     entry.origin_name,
                     entry.origin_image_url,
                     entry.feed_content,
+                    entry.post_url,
                     EntryStatus.PENDING.value,
                     now,
                     now,
@@ -611,7 +612,9 @@ class EntryRepository:
             rows = conn.execute(
                 f"""
                 SELECT e.vocast_episode_id, e.id AS entry_id, e.source_id,
-                       s.name AS source_name, e.article_url, e.title, e.author,
+                       s.name AS source_name,
+                       COALESCE(e.post_url, e.article_url) AS article_url,
+                       e.title, e.author,
                        e.published_at, e.origin_name, e.duration_seconds,
                        e.audio_bytes
                 FROM entries e
@@ -901,7 +904,9 @@ class PlaylistRepository:
             rows = conn.execute(
                 f"""
                 SELECT e.vocast_episode_id, e.id AS entry_id, e.source_id,
-                       s.name AS source_name, e.article_url, e.title, e.author,
+                       s.name AS source_name,
+                       COALESCE(e.post_url, e.article_url) AS article_url,
+                       e.title, e.author,
                        e.published_at, e.origin_name, e.duration_seconds,
                        e.audio_bytes, pe.position, pe.added_at
                 FROM playlist_entries pe

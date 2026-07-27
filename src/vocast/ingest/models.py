@@ -57,6 +57,10 @@ class FeedEntry:
     origin_name: str | None = None
     #: Artwork for that publication, used as the episode's cover.
     origin_image_url: str | None = None
+    #: A link post's own page, when article_url points outward at whatever the
+    #: post is discussing. Shown as the episode's link, because that is the
+    #: piece that was narrated; article_url stays the fetch target.
+    post_url: str | None = None
     #: The post's own text, set when it should be narrated in preference to
     #: fetching article_url. See _SCHEMA_V7.
     feed_content: str | None = None
@@ -111,6 +115,7 @@ class Entry:
     downloaded_at: datetime | None
     marked_read_at: datetime | None
     feed_content: str | None
+    post_url: str | None
     progress_done: int | None
     progress_total: int | None
     status: EntryStatus
@@ -140,6 +145,7 @@ class Entry:
             downloaded_at=from_iso(row["downloaded_at"]),
             marked_read_at=from_iso(row["marked_read_at"]),
             feed_content=row["feed_content"],
+            post_url=row["post_url"],
             progress_done=row["progress_done"],
             progress_total=row["progress_total"],
             status=EntryStatus(row["status"]),

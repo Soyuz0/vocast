@@ -19,6 +19,7 @@ password) and get back a token used as `Authorization: GoogleLogin auth=...`.
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
@@ -294,6 +295,7 @@ class FreshRSSAPIAdapter:
         guid = item.get("id")
         if not isinstance(guid, str) or not guid:
             return None
+        own_text = self._own_text(item, article_url)
         return FeedEntry(
             source_id=self._source.id,
             external_guid=guid,
@@ -304,7 +306,8 @@ class FreshRSSAPIAdapter:
             summary=_summary(item),
             origin_name=_origin_name(item),
             origin_image_url=self._icon_for(item),
-            feed_content=self._own_text(item, article_url),
+            feed_content=own_text,
+            post_url=self._post_url(item, article_url) if own_text else None,
         )
 
     def _own_text(self, item: dict[str, Any], article_url: str) -> str | None:
@@ -336,6 +339,26 @@ class FreshRSSAPIAdapter:
         minimum = int(config.get("min_own_text_chars", 400))
         return body if len(_visible_length(body)) >= minimum else None
 
+    def _post_url(self, item: dict[str, Any], article_url: str) -> str | None:
+        """A link post's own page, when the body advertises one.
+
+        The API offers no such field: both alternate and canonical carry the
+        outbound link, so the permalink only exists as an anchor in the body.
+        Only an anchor that both marks itself as a permalink and sits on the
+        publication's own site is accepted, because guessing wrong sends the
+        listener somewhere unrelated, and the outbound link it replaces is a
+        reasonable answer already.
+        """
+        site = self._feed_sites.get(
+            (item.get("origin") or {}).get("streamId", "")
+            if isinstance(item.get("origin"), dict)
+            else ""
+        )
+        if not site:
+            return None
+        found = _permalink_href(_body_html(item) or "", site)
+        return found if found and found != article_url else None
+
     def _icon_for(self, item: dict[str, Any]) -> str | None:
         origin = item.get("origin")
         if not isinstance(origin, dict):
@@ -364,6 +387,38 @@ def _alternate_href(item: dict[str, Any]) -> str | None:
                 if isinstance(href, str) and href.startswith(("http://", "https://")):
                     return href
     return None
+
+
+_PERMALINK_TEXTS = frozenset({"★", "☆", "∞", "#", "permalink", "link"})
+_ANCHOR = re.compile(r"<a\s([^>]*)>(.*?)</a>", re.DOTALL | re.IGNORECASE)
+_ATTRS = re.compile(r"([a-zA-Z:-]+)\s*=\s*\"([^\"]*)\"")
+
+
+def _permalink_href(body: str, site: str) -> str | None:
+    """The last self-referential permalink anchor in a post body.
+
+    The last one, because a post can mention its own site mid-text -- linking a
+    previous entry, say -- while the permalink conventionally closes the item.
+    """
+    found = None
+    for match in _ANCHOR.finditer(body):
+        attributes = dict(_ATTRS.findall(match.group(1)))
+        href = attributes.get("href", "")
+        if not href.startswith(("http://", "https://")):
+            continue
+        if not _same_site(site, href):
+            continue
+        title = (attributes.get("title") or "").casefold()
+        rel = (attributes.get("rel") or "").casefold()
+        text = re.sub(r"<[^>]*>", "", match.group(2)).strip().casefold()
+        if (
+            title.startswith("permanent link")
+            or "permalink" in title
+            or rel == "bookmark"
+            or text in _PERMALINK_TEXTS
+        ):
+            found = href
+    return found
 
 
 def _same_site(site: str, article_url: str) -> bool:

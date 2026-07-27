@@ -535,3 +535,44 @@ def test_unknown_feed_site_falls_back_to_fetching_the_link():
         FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0].feed_content
         is None
     )
+
+
+PERMALINK_BODY = BODY + (
+    '<div><a title="Permanent link to \u2018A Post\u2019" '
+    'href="https://daringfireball.net/linked/2026/07/24/a-post">\u2605</a></div>'
+)
+
+
+def test_a_link_post_records_its_own_permalink():
+    """The episode is the post, so that is what a listener should be sent to;
+    article_url stays the outbound link because it is still the fetch target."""
+    api = FakeAPIWithSites(
+        [{"items": [_linked_item("https://www.theguardian.com/x", PERMALINK_BODY)]}]
+    )
+
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+
+    assert entry.post_url == "https://daringfireball.net/linked/2026/07/24/a-post"
+    assert entry.article_url == "https://www.theguardian.com/x"
+
+
+def test_a_link_post_without_a_permalink_keeps_only_the_outbound_link():
+    """Most link blogs publish no permalink in the body, and inventing one would
+    send the listener somewhere unrelated."""
+    api = FakeAPIWithSites([{"items": [_linked_item("https://www.theguardian.com/x")]}])
+
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+
+    assert entry.post_url is None
+
+
+def test_a_normal_article_has_no_permalink_recorded():
+    """Only link posts have two URLs; for everything else article_url is already
+    the post."""
+    api = FakeAPIWithSites(
+        [{"items": [_linked_item("https://daringfireball.net/2025/05/post")]}]
+    )
+
+    [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
+
+    assert entry.post_url is None
