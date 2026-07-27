@@ -209,7 +209,7 @@ def test_extraction_failure_is_permanent(
         VocastEpisodeGenerator(engine=engine).generate_from_url("https://example.com/a")
 
 
-@pytest.mark.parametrize("status", [404, 401, 403, 410, 451])
+@pytest.mark.parametrize("status", [404, 401, 410, 451])
 def test_client_error_statuses_are_permanent(
     lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch, status: int
 ):
@@ -220,12 +220,24 @@ def test_client_error_statuses_are_permanent(
         VocastEpisodeGenerator(engine=engine).generate_from_url("https://example.com/a")
 
 
-@pytest.mark.parametrize("status", [429, 500, 502, 503, 504, 408])
+@pytest.mark.parametrize("status", [403, 429, 500, 502, 503, 504, 408])
 def test_server_and_rate_limit_statuses_are_transient(
     lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch, status: int
 ):
     _stub_extraction_raising(
         monkeypatch, FetchError(f"HTTP {status} Nope from https://example.com/a")
+    )
+    with pytest.raises(TransientGenerationError):
+        VocastEpisodeGenerator(engine=engine).generate_from_url("https://example.com/a")
+
+
+def test_forbidden_is_retried_rather_than_discarded(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """Bot-protection edges answer 403 under load instead of 429, and serve the
+    same URL happily later, so treating it as final discards a fetchable article."""
+    _stub_extraction_raising(
+        monkeypatch, FetchError("HTTP 403 Forbidden from https://example.com/a")
     )
     with pytest.raises(TransientGenerationError):
         VocastEpisodeGenerator(engine=engine).generate_from_url("https://example.com/a")

@@ -308,7 +308,12 @@ class VocastEpisodeGenerator:
 
 # HTTP statuses that are worth another attempt: rate limits, request timeouts,
 # and anything the origin server blames on itself.
-_RETRYABLE_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504, 507, 509})
+# 403 is here because bot-protection edges return it under load rather than 429.
+# Twelve openai.com articles were discarded this way, and the same fetcher gets
+# 200 for those URLs on a later attempt, so the rejection was never about the
+# request being unacceptable. Retries are bounded, so a page that really does
+# refuse everyone still ends up failed, just after a few attempts instead of one.
+_RETRYABLE_STATUSES = frozenset({403, 408, 425, 429, 500, 502, 503, 504, 507, 509})
 
 
 def _classify_fetch_error(exc: FetchError) -> GenerationError:
