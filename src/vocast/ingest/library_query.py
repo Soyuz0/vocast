@@ -186,6 +186,28 @@ class LibraryQueryService:
             query=normalized,
         )
 
+    def count(self, query: LibraryQuery) -> int:
+        """How many entries match, without paying for a page of rows.
+
+        The mobile source list needs a total per destination -- everything, and
+        the Listen Later playlist -- under whichever read filter is active.
+        Running a search and discarding its items would fetch rows nobody
+        renders.
+        """
+        clauses, params = self._filters(self._normalize(query))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._db.reading() as conn:
+            return conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM entries e
+                JOIN sources s ON s.id = e.source_id
+                {_PLAYLIST_JOIN}
+                {where}
+                """,
+                tuple(params),
+            ).fetchone()[0]
+
     def sources(self) -> list[Source]:
         return SourceRepository(self._db).all()
 

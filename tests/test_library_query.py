@@ -164,6 +164,16 @@ def test_status_queue_and_read_filters(library_data):
     ] == ["Gamma notes"]
 
 
+def test_count_agrees_with_search_without_paging(library_data):
+    """The mobile source list needs totals, not rows, per destination."""
+    _, service, *_ = library_data
+
+    assert service.count(LibraryQuery()) == 3
+    assert service.count(LibraryQuery(read=False)) == 2
+    assert service.count(LibraryQuery(queued=True, read=True)) == 1
+    assert service.count(LibraryQuery(search="alpha", page_size=1)) == 1
+
+
 def test_date_and_duration_ranges(library_data):
     _, service, *_, now = library_data
     dates = service.search(
