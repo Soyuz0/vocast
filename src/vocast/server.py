@@ -145,6 +145,7 @@ def _render_all(
     state: ServiceState | None, base_url: str, request: Request | None = None
 ) -> str:
     from .ingest.feeds import (
+        FEED_TITLE,
         FeedChannel,
         build_podcast_rss,
         collect_episodes,
@@ -175,7 +176,7 @@ def _render_all(
     cover = with_token(f"{base_url}/cover.jpg", token) if _SHOW_COVER else None
     return build_podcast_rss(
         FeedChannel(
-            title="vocast",
+            title=FEED_TITLE,
             link=base_url,
             description="Self-hosted articles-as-podcasts",
             image_url=cover,
@@ -187,6 +188,7 @@ def _render_all(
 def _build_rss(entries: list[LibraryEntry], base_url: str) -> str:
     """Render a feed from library entries alone, without ingestion provenance."""
     from .ingest.feeds import (
+        FEED_TITLE,
         FeedChannel,
         build_podcast_rss,
         library_entries_to_episodes,
@@ -194,7 +196,7 @@ def _build_rss(entries: list[LibraryEntry], base_url: str) -> str:
 
     return build_podcast_rss(
         FeedChannel(
-            title="vocast",
+            title=FEED_TITLE,
             link=base_url,
             description="Self-hosted articles-as-podcasts",
             image_url=f"{base_url}/cover.jpg" if _SHOW_COVER else None,

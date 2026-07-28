@@ -962,3 +962,36 @@ def test_the_legacy_alias_retires_read_episodes_like_the_feed_it_aliases(
 
     assert client.get("/feeds/all.xml").text.count("<item>") == 0
     assert client.get("/feed.xml").text.count("<item>") == 0
+
+
+# --- feed naming ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/feed.xml",
+        "/feeds/all.xml",
+        "/feeds/recent.xml",
+        "/feeds/listen-later.xml",
+    ],
+)
+def test_every_feed_is_named_consistently(context: AppContext, path: str):
+    """A podcast client shows the channel title as the show name, so the feeds
+    should read as one publisher rather than several unrelated shows."""
+    _ready_entries(context, 1)
+    client = TestClient(create_app(ServiceState(context=context)))
+
+    title = client.get(path).text.split("<title>")[1].split("</title>")[0]
+
+    assert title == "Vocast" or title.startswith("Vocast - ")
+    assert "—" not in title, "an em dash in one feed and a hyphen in another"
+
+
+def test_a_source_feed_is_named_after_its_source(context: AppContext):
+    source_id = _add_ready_entry(context, source_name="Reader", episode_id="ep-src")
+    client = TestClient(create_app(ServiceState(context=context)))
+
+    body = client.get(f"/feeds/source/{source_id}.xml").text
+
+    assert "<title>Vocast - Reader</title>" in body

@@ -32,6 +32,12 @@ def with_token(url: str, token: str | None) -> str:
     return f"{url}{separator}token={urllib.parse.quote(token, safe='')}"
 
 
+#: The podcast's name in a client. Per-feed variants extend it with
+#: " - <what>", so a subscriber sees one publisher rather than several
+#: unrelated shows.
+FEED_TITLE = "Vocast"
+
+
 @dataclass(frozen=True)
 class FeedEpisode:
     episode_id: str

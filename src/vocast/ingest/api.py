@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from .adapters import supported_kinds
 from .context import AppContext
 from .feeds import (
+    FEED_TITLE,
     FeedChannel,
     build_podcast_rss,
     collect_episodes,
@@ -255,7 +256,7 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
             state,
             request,
             source_id=None,
-            title="vocast \u2014 Recent",
+            title=f"{FEED_TITLE} - Recent",
             description="The newest narrated articles, not yet downloaded",
             max_items=state.context.config.server.recent_feed_items,
         )
@@ -287,7 +288,7 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
         )
         xml = build_podcast_rss(
             FeedChannel(
-                title="Vocast - Listen Later",
+                title=f"{FEED_TITLE} - Listen Later",
                 link=base,
                 description="Articles selected for listening",
                 image_url=with_token(f"{base}/cover.jpg", state.feed_token),
@@ -333,7 +334,7 @@ def _render_feed(
         ),
         hide_read_before=state.hide_read_before(),
     )
-    title = title or (f"vocast — {source_name}" if source_name else "vocast")
+    title = title or (f"{FEED_TITLE} - {source_name}" if source_name else FEED_TITLE)
     description = description or (
         f"Articles from {source_name}, narrated"
         if source_name
