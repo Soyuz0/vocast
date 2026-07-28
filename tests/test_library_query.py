@@ -164,6 +164,44 @@ def test_status_queue_and_read_filters(library_data):
     ] == ["Gamma notes"]
 
 
+def test_count_agrees_with_search_without_paging(library_data):
+    """The mobile source list needs totals, not rows, per destination."""
+    _, service, *_ = library_data
+
+    assert service.count(LibraryQuery()) == 3
+    assert service.count(LibraryQuery(read=False)) == 2
+    assert service.count(LibraryQuery(queued=True, read=True)) == 1
+    assert service.count(LibraryQuery(search="alpha", page_size=1)) == 1
+
+
+def test_status_counts_narrow_with_the_query_but_not_with_status_itself(
+    library_data,
+):
+    """Unlike facets(), these follow the filters they are shown beside."""
+    _, service, *_ = library_data
+
+    assert service.status_counts() == {"ready": 2, "failed": 1}
+    assert service.status_counts(LibraryQuery(read=True)) == {"ready": 1}
+    assert service.status_counts(LibraryQuery(queued=True)) == {"ready": 1}
+
+    # Picking one status must not report every other as zero, or there would be
+    # no way to move between them.
+    assert service.status_counts(LibraryQuery(status=EntryStatus.FAILED)) == {
+        "ready": 2,
+        "failed": 1,
+    }
+
+
+def test_global_status_facets_are_left_alone(library_data):
+    """The desktop sidebar depends on these staying whole-library totals."""
+    _, service, *_ = library_data
+
+    assert service.facets(LibraryQuery(read=True)).by_status == {
+        "ready": 2,
+        "failed": 1,
+    }
+
+
 def test_date_and_duration_ranges(library_data):
     _, service, *_, now = library_data
     dates = service.search(

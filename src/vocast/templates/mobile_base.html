@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>{% block title %}Vocast{% endblock %}</title>
+<style>
+/* Palette shared with /library so the two surfaces read as one product; the
+   type and metrics are iOS rather than the design system's, because this page
+   is trying to feel like a native list view. No webfont: the point is the
+   system stack, and the tailnet has no route to a font CDN anyway. */
+:root {
+  --bg-1:#14141D; --bg-2:#212029; --bg-3:#2C2B34; --bg-4:#414048;
+  --text-white:#FFF; --text-grey:#808080; --text-dark-grey:#4F4F4F;
+  --tint:#72BBFF; --accent:#4037F0; --star:#F5963D; --success:#34C5A2; --error:#F86060;
+  --warning:#F5963D;
+  --hairline:rgba(255,255,255,.09);
+  --chrome:rgba(20,20,29,.82);
+  --font-ios:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,system-ui,sans-serif;
+  --toolbar-height:50px;
+  --ease-ios:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box}
+html{background:var(--bg-1);-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg-1);color:var(--text-white);
+  font-family:var(--font-ios);font-size:17px;line-height:1.4;
+  -webkit-font-smoothing:antialiased;
+  -webkit-tap-highlight-color:transparent;
+  -webkit-overflow-scrolling:touch;
+  padding-bottom:calc(var(--toolbar-height) + env(safe-area-inset-bottom) + 8px);
+}
+a{color:var(--tint);text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;
+  -webkit-tap-highlight-color:transparent}
+:focus-visible{outline:2px solid var(--tint);outline-offset:-2px;border-radius:4px}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* ---- navigation bar: one translucent, sticky row ----
+   Back, title, refresh. The title is taken out of the flow and pinned between
+   two equal insets rather than centred in whatever space the side controls
+   leave over; otherwise it would sit dead centre on page one, where the
+   leading slot is empty, and visibly off-centre on page two, where it is not. */
+.nav{position:sticky;top:0;z-index:4;background:var(--chrome);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--hairline);padding-top:env(safe-area-inset-top)}
+.nav .bar{position:relative;display:flex;align-items:center;min-height:44px;padding:0 4px}
+.nav .slot{display:flex;align-items:center;flex:none;min-width:44px}
+.nav .slot.trailing{margin-left:auto;justify-content:flex-end}
+/* Chevron only. A back label wide enough to read is wide enough to collide
+   with a centred title, and the title already names where you are. */
+.back{display:inline-flex;align-items:center;justify-content:center;
+  width:44px;height:44px;color:var(--tint)}
+.back:active{opacity:.5}
+.back .chev{display:block;width:11px;height:11px;border-left:2.5px solid currentColor;
+  border-bottom:2.5px solid currentColor;transform:rotate(45deg);margin-left:4px}
+/* pointer-events off because it spans the whole bar and must never swallow a
+   tap meant for the control underneath it. */
+.bartitle{position:absolute;left:52px;right:52px;margin:0;pointer-events:none;
+  font-size:17px;font-weight:600;line-height:1.25;text-align:center;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subtitle{padding:0 16px 12px;margin:6px 0 0;color:var(--text-grey);font-size:14px;
+  text-align:center}
+/* A link, not a button, so a tap still reloads the page with JavaScript off;
+   the script upgrades it to pull read state from the reader first. */
+.refresh{display:inline-flex;align-items:center;justify-content:center;
+  width:44px;height:44px;flex:none;color:var(--tint);font-size:21px;line-height:1}
+.refresh:active{opacity:.5}
+.refresh .arrow{display:block}
+.refresh[data-busy="true"]{color:var(--text-grey);pointer-events:none}
+.refresh[data-busy="true"] .arrow{animation:spin 900ms linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---- grouped list, page one ---- */
+.group{margin:18px 16px 0}
+.group h2{margin:0 0 7px 16px;font-size:13px;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--text-grey)}
+.card{background:var(--bg-2);border-radius:12px;overflow:hidden}
+.item{position:relative;display:flex;align-items:center;gap:12px;min-height:48px;
+  padding:11px 14px;color:var(--text-white)}
+.item:active{background:var(--bg-3)}
+/* Hairlines inset from the leading edge, so the separator starts where the
+   label does rather than cutting the icon column in half. */
+.item + .item::before{content:"";position:absolute;left:48px;right:0;top:0;height:1px;
+  background:var(--hairline)}
+.item .glyph{width:22px;flex:none;text-align:center;font-size:17px;color:var(--tint)}
+.item .label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .n{color:var(--text-grey);font-size:15px;font-variant-numeric:tabular-nums}
+.item .disclosure{width:8px;height:8px;flex:none;border-top:2px solid var(--text-dark-grey);
+  border-right:2px solid var(--text-dark-grey);transform:rotate(45deg)}
+
+/* ---- bottom toolbar ---- */
+.toolbar{position:fixed;left:0;right:0;bottom:0;z-index:5;background:var(--chrome);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+  border-top:1px solid var(--hairline);padding-bottom:env(safe-area-inset-bottom)}
+.toolbar .bar{position:relative;display:grid;grid-template-columns:1fr auto 1fr;
+  align-items:center;height:var(--toolbar-height);padding:0 8px}
+.toolbar .status{font-size:12px;color:var(--text-grey);padding-left:8px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+/* An iOS segmented control: one tap per destination rather than cycling
+   through the two you did not want to reach the one you did. */
+.segmented{display:inline-flex;align-items:stretch;gap:2px;padding:2px;
+  border-radius:9px;background:var(--bg-3)}
+.seg{display:inline-flex;align-items:center;justify-content:center;
+  min-height:30px;padding:0 11px;border-radius:7px;
+  color:var(--text-white);font-size:13px;font-weight:500;white-space:nowrap}
+.seg:active{opacity:.6}
+.seg[aria-current="true"]{background:var(--bg-4);font-weight:600;
+  box-shadow:0 1px 2px rgba(0,0,0,.45)}
+/* Three segments, a count and a search button is a lot for a 320px phone;
+   the segments give up padding before the count gives up characters. */
+@media (max-width:360px){
+  .seg{padding:0 8px;font-size:12px}
+  .toolbar .status{font-size:11px}
+}
+.searchpop{justify-self:end}
+.searchpop>summary{display:flex;align-items:center;justify-content:center;
+  width:44px;height:44px;list-style:none;color:var(--tint);cursor:pointer}
+.searchpop>summary::-webkit-details-marker{display:none}
+.searchpop>summary:active{opacity:.5}
+.glass{display:block;width:15px;height:15px;border:2px solid currentColor;border-radius:50%;
+  position:relative}
+.glass::after{content:"";position:absolute;right:-6px;bottom:-4px;width:8px;height:2px;
+  background:currentColor;transform:rotate(45deg);border-radius:2px}
+.pop{position:absolute;left:8px;right:8px;bottom:calc(100% + 6px);background:var(--bg-2);
+  border:1px solid var(--hairline);border-radius:12px;padding:8px;
+  box-shadow:0 8px 30px rgba(0,0,0,.55)}
+.pop form{display:flex;gap:8px}
+.pop input[type="search"]{flex:1;min-width:0;height:40px;padding:0 12px;border-radius:10px;
+  border:1px solid var(--hairline);background:var(--bg-3);color:var(--text-white);
+  font-family:inherit;font-size:16px}
+.pop input::placeholder{color:var(--text-grey)}
+.pop button[type="submit"]{min-height:40px;padding:0 14px;border-radius:10px;
+  background:var(--accent);color:#fff;font-size:15px;font-weight:600}
+.pop .clear{align-self:center;padding:0 8px;color:var(--tint);font-size:14px}
+
+.empty{margin:64px 24px;text-align:center;color:var(--text-grey)}
+.empty strong{display:block;color:var(--text-white);font-size:20px;margin-bottom:6px}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+{% block styles %}{% endblock %}
+</style>
+</head>
+<body data-base-path="{{ base_path }}">
+{% block header %}
+<header class="nav">
+  <div class="bar">
+    <div class="slot leading">{% block navleading %}{% endblock %}</div>
+    <h1 class="bartitle">{% block navtitle %}{% endblock %}</h1>
+    <div class="slot trailing">
+      <a class="refresh" href="{{ self_url }}" data-refresh aria-label="Refresh">
+        <span class="arrow" aria-hidden="true">&#8635;</span>
+      </a>
+    </div>
+  </div>
+  {% block navbelow %}{% endblock %}
+</header>
+{% endblock %}
+{% block content %}{% endblock %}
+
+<nav class="toolbar" aria-label="Library controls">
+  <div class="bar">
+    <span class="status">{% block toolbar_status %}{% endblock %}</span>
+    <div class="segmented" role="group" aria-label="Show">
+      {% for option in filters %}
+      <a class="seg" href="{{ option.url }}"
+         {% if option.active %}aria-current="true"{% endif %}>{{ option.label }}</a>
+      {% endfor %}
+    </div>
+    <details class="searchpop" data-searchpop {% if search_value %}open{% endif %}>
+      <summary data-searchopen aria-label="Search">
+        <span class="glass" aria-hidden="true"></span>
+      </summary>
+      <div class="pop">
+        <form method="get" action="{{ search_action }}" role="search">
+          {% for name, value in search_hidden.items() %}
+          <input type="hidden" name="{{ name }}" value="{{ value }}">
+          {% endfor %}
+          <label class="sr" for="mobile-search">Search articles</label>
+          <input id="mobile-search" type="search" name="search" value="{{ search_value }}"
+                 placeholder="Search articles" enterkeyhint="search"
+                 autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+          <button type="submit">Search</button>
+          {% if search_value %}
+          <a class="clear" href="{{ search_clear_url }}">Clear</a>
+          {% endif %}
+        </form>
+      </div>
+    </details>
+  </div>
+</nav>
+
+<script>
+(function () {
+  // The search panel is a <details>, so the magnifying glass opens it with no
+  // script at all. What the script adds is the keyboard.
+  //
+  // iOS Safari only raises the keyboard when focus() runs synchronously inside
+  // a real user-gesture handler. The obvious place -- the details' own toggle
+  // event -- is not one: it is dispatched as a separate task after the open
+  // attribute has already changed, so focusing there put the caret in the
+  // field and left the keyboard down. So the summary's activation is taken
+  // over instead: cancel the default toggle, open the panel by hand, and focus
+  // in the same tick as the tap, with nothing asynchronous in between.
+  var pop = document.querySelector('[data-searchpop]');
+  var opener = pop && pop.querySelector('[data-searchopen]');
+  if (opener) opener.addEventListener('click', function (event) {
+    var field = pop.querySelector('input[type="search"]');
+    if (pop.open) {
+      // Let the default close it, but drop the keyboard first so the toolbar
+      // does not sit over a shrinking viewport on the way out.
+      field.blur();
+      return;
+    }
+    event.preventDefault();
+    pop.open = true;
+    // Reading layout forces the style update the open attribute just queued,
+    // so the field is rendered -- and therefore focusable -- by the next line.
+    // Still synchronous, so the gesture is intact.
+    void field.offsetWidth;
+    field.focus();
+    // Typing then replaces the previous search rather than appending to it.
+    field.select();
+  });
+
+  // Refresh means "show me what the reader thinks now". Reloading alone would
+  // not do it: the page-load sync is throttled, so pressing this a minute after
+  // marking things read in FreshRSS would redraw the same stale flags. Force
+  // the pull first, then reload — and reload even if the pull fails, because
+  // the reload is the request and the sync is a courtesy.
+  var refresh = document.querySelector('[data-refresh]');
+  if (refresh) refresh.addEventListener('click', async function (event) {
+    event.preventDefault();
+    refresh.setAttribute('data-busy', 'true');
+    try {
+      await fetch(document.body.dataset.basePath + '/api/read-sync', {
+        method: 'POST', credentials: 'same-origin'
+      });
+    } catch (error) {
+      /* offline, or the reader is down; the reload still shows current state */
+    }
+    location.reload();
+  });
+})();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

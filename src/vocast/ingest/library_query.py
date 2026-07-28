@@ -186,6 +186,65 @@ class LibraryQueryService:
             query=normalized,
         )
 
+    def count(self, query: LibraryQuery) -> int:
+        """How many entries match, without paying for a page of rows.
+
+        The mobile source list needs a total per destination -- everything, and
+        the Listen Later playlist -- under whichever read filter is active.
+        Running a search and discarding its items would fetch rows nobody
+        renders.
+        """
+        clauses, params = self._filters(self._normalize(query))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._db.reading() as conn:
+            return conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM entries e
+                JOIN sources s ON s.id = e.source_id
+                {_PLAYLIST_JOIN}
+                {where}
+                """,
+                tuple(params),
+            ).fetchone()[0]
+
+    def status_counts(self, query: LibraryQuery | None = None) -> dict[str, int]:
+        """How many entries sit in each status, under the rest of the filters.
+
+        facets() reports these globally on purpose: on the desktop page they are
+        the primary navigation, and a queue size that shrank whenever a
+        publication was picked would stop answering "how much is left to
+        narrate". The phone lists them beside publication counts that do follow
+        the read filter, where a status total ignoring it would be the one
+        number on the page disagreeing with every other.
+
+        The status filter itself is excluded, for the same reason the origin
+        facet excludes its own: otherwise picking one would report every other
+        status as zero and there would be no way to move between them.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if query is not None:
+            clauses, params = self._filters(
+                self._normalize(query), ignore=frozenset({"status"})
+            )
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._db.reading() as conn:
+            return {
+                row["status"]: row["n"]
+                for row in conn.execute(
+                    f"""
+                    SELECT e.status AS status, COUNT(*) AS n
+                    FROM entries e
+                    JOIN sources s ON s.id = e.source_id
+                    {_PLAYLIST_JOIN}
+                    {where}
+                    GROUP BY e.status
+                    """,
+                    tuple(params),
+                )
+            }
+
     def sources(self) -> list[Source]:
         return SourceRepository(self._db).all()
 
@@ -280,7 +339,8 @@ class LibraryQueryService:
 
         ignore drops one dimension, which is what a facet needs: counting
         publications under the active publication filter would report every other
-        publication as zero and make it impossible to switch between them.
+        publication as zero and make it impossible to switch them. The same holds
+        for statuses, which the phone's status list counts the same way.
         """
         clauses: list[str] = []
         params: list[Any] = []
@@ -299,7 +359,7 @@ class LibraryQueryService:
         if query.origin_id and "origin_id" not in ignore:
             clauses.append(f"UNICODE_CASEFOLD(TRIM({_ORIGIN_EXPRESSION})) = ?")
             params.append(query.origin_id)
-        if query.status is not None:
+        if query.status is not None and "status" not in ignore:
             clauses.append("e.status = ?")
             params.append(query.status.value)
         if query.queued is not None:

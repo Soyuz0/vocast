@@ -1,0 +1,74 @@
+{% extends "mobile_base.html" %}
+{% block title %}Vocast{% endblock %}
+
+{% block navtitle %}Vocast{% endblock %}
+
+{% block styles %}
+/* Status rows borrow the library page's colour language, so a green dot means
+   the same thing on a phone as it does on a desktop. */
+.status-dot{width:9px;height:9px;border-radius:50%;background:var(--text-grey);display:block}
+.status-dot.ready{background:var(--success)}
+.status-dot.failed{background:var(--error)}
+.status-dot.processing{background:var(--warning);animation:pulse 1.4s ease-in-out infinite}
+.status-dot.ignored,.status-dot.expired{background:var(--text-dark-grey)}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.item .glyph.dotcell{display:flex;align-items:center;justify-content:center}
+{% endblock %}
+
+{% block content %}
+<div class="group">
+  <div class="card">
+    <a class="item" href="{{ destination() }}">
+      <span class="glyph" aria-hidden="true">&#9776;</span>
+      <span class="label">Library</span>
+      <span class="n">{{ library_count }}</span>
+      <span class="disclosure" aria-hidden="true"></span>
+    </a>
+    <a class="item" href="{{ destination(playlist='listen-later') }}">
+      <span class="glyph" aria-hidden="true">&#9733;</span>
+      <span class="label">Listen Later</span>
+      <span class="n">{{ listen_later_count }}</span>
+      <span class="disclosure" aria-hidden="true"></span>
+    </a>
+  </div>
+</div>
+
+<div class="group">
+  <h2>Status</h2>
+  <div class="card">
+    {% for status in statuses %}
+    <a class="item" href="{{ destination(status=status.value) }}">
+      <span class="glyph dotcell" aria-hidden="true">
+        <span class="status-dot {{ status.value }}"></span>
+      </span>
+      <span class="label">{{ status.label }}</span>
+      <span class="n">{{ status.count }}</span>
+      <span class="disclosure" aria-hidden="true"></span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="group">
+  <h2>Publications</h2>
+  {% if publications %}
+  <div class="card">
+    {% for publication in publications %}
+    <a class="item" href="{{ destination(origin_id=publication.id) }}">
+      <span class="glyph" aria-hidden="true">&#9679;</span>
+      <span class="label">{{ publication.name }}</span>
+      <span class="n">{{ publication.count }}</span>
+      <span class="disclosure" aria-hidden="true"></span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>Nothing here yet</strong>
+    <span>No publications have {{ filter_label|lower }} articles.</span>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block toolbar_status %}{{ library_count }} {{ filter_label|lower }}{% endblock %}
