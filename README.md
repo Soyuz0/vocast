@@ -399,15 +399,33 @@ server:
 ```
 
 ```
-https://podcast.example.com/feeds/all.xml?token=YOUR_TOKEN
+https://podcast.example.com/feeds/recent.xml?token=YOUR_TOKEN
 ```
 
-Anything without a valid token gets `401`. The token is injected into the
-enclosure and cover URLs inside the feed, so clients keep working; rotate the
-value to revoke access. `/api/health` stays open so container health checks work.
+**Only the podcast is reachable from the internet.** That means the feed
+documents, the audio they enclose, and the cover art -- everything a podcast
+client fetches, and nothing else. The web library, the phone reader and the API
+answer `404` to an internet request *even with a valid token*, because the token
+exists so a client can fetch a feed, not as a login for the whole service. A
+`404` rather than a `403` is deliberate: refusing would confirm there is a
+library here to find.
+
+Requests that did not arrive over the internet -- from your tailnet, from
+localhost, from the container's own health check -- are not challenged at all,
+which is why `/api/health` still answers the Docker health check.
+
+Anything published but lacking a valid token gets `401`. The token is injected
+into the enclosure and cover URLs inside the feed, so clients keep working;
+rotate the value to revoke access.
 
 A podcast client cannot send an `Authorization` header, which is why the secret
 travels in the query string. Treat the URL itself as the credential.
+
+Requests are identified as coming from the internet by the
+`Tailscale-Funnel-Request` header, which Tailscale sets on everything it
+forwards and overwrites if a client tries to send its own. If you expose the
+service some other way, put it behind something that authenticates, because
+without that header nothing is challenged.
 
 ### Keeping the audio off the public internet
 
@@ -434,8 +452,14 @@ enclosures use the public host too.
 |---|---|
 | `/feed.xml` | Everything. Unchanged from earlier vocast versions. |
 | `/feeds/all.xml` | Everything. Identical to `/feed.xml`. |
+| `/feeds/recent.xml` | The newest `server.recent_feed_items` episodes still unheard (default 100). |
 | `/feeds/source/<id>.xml` | One source only, as its own show. |
 | `/feeds/listen-later.xml` | Only ready episodes selected in the web library. |
+
+`/feeds/recent.xml` exists because a podcast client re-parses every item on each
+refresh, so a feed holding the whole archive is slow to notice one new episode.
+It carries the same episodes as the combined feed, just the newest of them, and
+is the better thing to subscribe to day to day.
 
 Feeds carry the newest `server.feed_max_items` episodes (default 300); set it to
 `unlimited` for no cap. Rendering costs nothing per episode -- duration and size
@@ -475,16 +499,16 @@ newest-added first, with stable entry ids as tie-breakers. Each episode keeps
 its original article publication date and its existing library id as the
 podcast GUID.
 
+**The library is reachable only over the tailnet.** It is deliberately
+tokenless there, and an internet request for it answers `404` even with a valid
+feed token -- see [Private feeds](#private-feeds-and-apps-that-crawl-server-side)
+for why. The Listen Later *feed* is a feed like any other, so it follows the
+feed-token rule and can be subscribed to from anywhere.
+
 When `VOCAST_ADMIN_TOKEN` is configured, Listen Later changes require that same
 bearer token. The page asks for it on first use and stores it only in the current
 browser tab's session storage; Vocast never writes the token into the HTML or a
-URL. Direct `/library` is intentionally tokenless for access through a trusted
-tailnet address; do not expose that route directly to the internet. The bundled
-Funnel script maps public `/library` to the protected internal `/public/library`
-route instead. Open the public page as `/library?token=...`; Vocast validates the
-feed token, stores it in an HttpOnly same-site session cookie, and redirects to
-a clean `/library` URL so filters and pagination do not carry the secret. The
-Listen Later feed follows the same feed-token rule as existing feeds.
+URL.
 
 Removing an episode from Listen Later removes it from future feed responses but
 cannot delete a copy that a podcast app already downloaded. A download request
@@ -647,6 +671,11 @@ Two engines ship, both running the same Kokoro model and voices:
 tts:
   engine: kokoro-onnx    # or: kokoro
   voice: af_heart
+  # Optional. Reads block quotes in a second voice, so material the author is
+  # quoting is audibly someone else rather than a seamless part of their
+  # argument. Only affects who reads a passage; the narrated text is unchanged,
+  # and quotes that cannot be located are simply read by the narrator.
+  quote_voice: am_michael
 ```
 
 `kokoro` uses PyTorch. `kokoro-onnx` runs the same weights under ONNX Runtime and
@@ -911,6 +940,16 @@ the address check off so you can reach a LAN FreshRSS. **Only point it at hosts
 you trust.** With it enabled for a source, a malicious feed in that source can
 make your server fetch internal addresses. Prefer the per-source flag over the
 global one.
+
+**What the internet can reach.** Only the podcast: the feed documents, the audio
+they enclose, and the cover art. The library, the phone reader and the API answer
+`404` to an internet request even when it carries a valid feed token. This is
+enforced twice on purpose -- the service refuses those paths itself, and the
+bundled Funnel script publishes only the podcast paths -- because either layer
+alone is one mistake away from exposing the library, and a funnel can be
+reconfigured out from under the service. The check is app-wide rather than
+per-route, so a route added later is private by default rather than by someone
+remembering.
 
 **Admin API.** Write endpoints are unauthenticated unless `VOCAST_ADMIN_TOKEN`
 is set. That is fine on a loopback bind and not fine otherwise; the service logs

@@ -14,6 +14,21 @@ server:
   # without it they are derived from the incoming request, which behind a
   # TLS-terminating proxy yields unreachable http://internal-host URLs.
   public_base_url: https://podcast.example.com
+  # Required before anything is reachable from the internet. Only the podcast
+  # is ever published -- feeds, audio, cover art -- and those need this token;
+  # the library, the phone reader and the API answer 404 from the internet even
+  # with it. A podcast client cannot send an Authorization header, so the token
+  # travels in the URL: treat the URL as the credential.
+  feed_token: ${VOCAST_FEED_TOKEN:-}
+  # Newest episodes per feed. `unlimited` for no cap.
+  feed_max_items: 300
+  # Size of /feeds/recent.xml, the small feed meant for day-to-day subscribing:
+  # a client re-parses every item on each refresh, so an archive-sized feed is
+  # slow to notice one new episode.
+  recent_feed_items: 100
+  # Drop an episode from the feeds this many hours after it was marked read.
+  # The audio is kept. Unset keeps everything listed forever.
+  hide_after_read_hours: 48
 
 database:
   path: /data/vocast.db
@@ -51,9 +66,22 @@ tts:
   engine: kokoro
   # Any Kokoro voice id, e.g. af_heart (default), af_bella, am_michael.
   voice: af_heart
+  # Optional second voice for block quotes, so material the author is quoting
+  # sounds like someone else rather than part of their own argument. Only
+  # changes who reads a passage, never what is read.
+  quote_voice:
 
-# Bearer token required for the write endpoints of /api/*. Feeds and
-# /api/health always stay public, since podcast clients cannot authenticate.
+freshrss:
+  # Mark an article read in FreshRSS once its audio has been downloaded.
+  mark_read_on_download: false
+  # Shortest gap between read-state pulls triggered by viewing the library. The
+  # page reloads on every filter and page change, and none of those is a reason
+  # to ask the reader again; its refresh button ignores this.
+  read_sync_seconds: 60
+
+# Bearer token required for the write endpoints of /api/*. This is separate from
+# server.feed_token, which governs the podcast; /api is not reachable from the
+# internet at all, so this protects it on the tailnet.
 # Prefer setting VOCAST_ADMIN_TOKEN in the environment over writing it here.
 admin_token: ${VOCAST_ADMIN_TOKEN:-}
 
