@@ -43,9 +43,22 @@
 .mark:disabled,.star:disabled{cursor:default}
 .row[data-busy="true"] .rowface{opacity:.55}
 
-.msg{margin:0;padding:0 14px 9px 44px;font-size:12px;line-height:1.35;color:var(--text-grey)}
+/* Narration length, or how far off it is. Determinate: the fill is chunks done
+   over chunks total, capped at 99% because encoding follows the last chunk. */
+.synth{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.synth .bar{display:block;width:34px;height:4px;border-radius:999px;overflow:hidden;
+  background:rgba(255,255,255,.16)}
+.synth .bar>span{display:block;height:100%;min-width:3px;border-radius:inherit;
+  background:var(--warning)}
+.status-dot{width:7px;height:7px;border-radius:50%;display:block;background:var(--text-grey)}
+.status-dot.processing{background:var(--warning);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+
+.msg{margin:0;padding:0 14px 9px 44px;font-size:12px;line-height:1.35;color:var(--text-grey);
+  display:flex;align-items:baseline;gap:10px}
 .msg:empty{display:none}
 .msg[data-tone="error"]{color:var(--error)}
+.msg .undo{color:var(--tint);font-size:12px;text-decoration:underline;padding:2px 0}
 
 .hint{margin:0;padding:10px 16px 2px;font-size:12px;color:var(--text-dark-grey)}
 .hint[hidden]{display:none}
@@ -54,19 +67,19 @@
 .pager .pos{color:var(--text-grey);font-size:13px}
 {% endblock %}
 
-{% block header %}
-<header class="nav">
-  <div class="bar">
-    <a class="back" href="{{ back_url }}"><span class="chev" aria-hidden="true"></span>Vocast</a>
-  </div>
-  <h1 class="largetitle">{{ title }}</h1>
-  {% if search_value %}<p class="subtitle">Results for &ldquo;{{ search_value }}&rdquo;</p>{% endif %}
-</header>
+{% block navleading %}
+<a class="back" href="{{ back_url }}"><span class="chev" aria-hidden="true"></span>Vocast</a>
+{% endblock %}
+
+{% block navtitle %}
+<h1 class="largetitle">{{ title }}</h1>
+{% if search_value %}<p class="subtitle">Results for &ldquo;{{ search_value }}&rdquo;</p>{% endif %}
 {% endblock %}
 
 {% block content %}
 {% if page.items %}
-<p class="hint" data-hint hidden>Swipe right to toggle read, left to star.</p>
+<p class="hint" data-hint hidden>Swipe a row right to toggle read, left to star.
+  The screen edges are left free for Safari&rsquo;s back gesture.</p>
 <ul class="rows" data-rows aria-label="{{ title }} articles">
   {% for item in page.items %}
   <li class="row" data-entry-id="{{ item.entry_id }}" data-title="{{ item.title }}"
@@ -89,6 +102,24 @@
             <span class="sep" aria-hidden="true">&middot;</span>
             <span>{{ item.published_at.strftime('%b %d') if item.published_at.year == this_year
                      else item.published_at.strftime('%b %d, %Y') }}</span>
+            {% endif %}
+            {#- Length only once there is one. A percentage while it is being
+                narrated, nothing at all for an article nobody has started: an
+                empty slot says "not yet" more honestly than "0 min" would. -#}
+            {% set percent = item.progress_percent %}
+            {% if percent %}
+            <span class="sep" aria-hidden="true">&middot;</span>
+            <span class="synth" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                  aria-valuenow="{{ percent }}"
+                  aria-label="Narrating, {{ percent }} percent complete">
+              <span class="bar"><span style="width: {{ percent }}%"></span></span>{{ percent }}%
+            </span>
+            {% elif item.status.value == 'processing' %}
+            <span class="sep" aria-hidden="true">&middot;</span>
+            <span class="synth"><span class="status-dot processing" aria-hidden="true"></span>narrating</span>
+            {% elif item.duration_seconds %}
+            <span class="sep" aria-hidden="true">&middot;</span>
+            <span>{{ [1, (item.duration_seconds / 60) | round | int] | max }} min</span>
             {% endif %}
           </span>
         </a>
@@ -148,10 +179,30 @@
   var ENGAGE = 12;  // horizontal travel before the row, rather than the page, takes the gesture
   var COMMIT = 76;  // travel past which releasing performs the action
 
-  function say(row, text, tone) {
+  // iOS Safari owns a strip at each screen edge for its own back and forward
+  // swipes. A row gesture starting there runs alongside the system one: the
+  // page begins sliding away while the row slides under it, and whichever
+  // recogniser wins, the other has already left the screen half-animated. A
+  // web page cannot cancel a system recogniser once it has begun, so the only
+  // reliable fix is to not start ours in that strip. It costs little — the
+  // leading strip is the read button and the trailing one the star, both of
+  // which are still tappable, and the rest of the row still swipes.
+  var EDGE_GUARD = 28;
+
+  function say(row, text, tone, undoable) {
     var message = row.querySelector('[data-message]');
     message.setAttribute('data-tone', tone || 'info');
     message.textContent = text;
+    if (!undoable) return;
+    // Both actions are toggles, so undoing one is running it again. Worth a
+    // button rather than "swipe it back": swiping the other way is the other
+    // action, not a reversal of this one.
+    var undo = document.createElement('button');
+    undo.type = 'button';
+    undo.className = 'undo';
+    undo.textContent = 'Undo';
+    undo.setAttribute('data-undo', undoable);
+    message.appendChild(undo);
   }
 
   function setRead(row, read) {
@@ -176,6 +227,12 @@
     return 'That did not save \u2014 try again';
   }
 
+  // Rows never leave on their own. Marking one read while the unread filter is
+  // active leaves it in place, dimmed, with an Undo beside it: a list that
+  // resequenced itself under a moving thumb would lose your place and take the
+  // undo with it. The counts in the toolbar are likewise as-of-load. Refresh,
+  // top right, is what reconciles the page with the filter.
+
   // Optimistic, then reconciled: the row moves under the finger immediately,
   // but the server's answer is what it ends up showing, and a failure puts it
   // back rather than leaving a lie on screen.
@@ -192,9 +249,10 @@
       // Worth saying out loud: the reader is the source of truth, so a refusal
       // here means the next poll will quietly put the article back.
       if (body.upstream_failed) {
-        say(row, 'Changed here, but FreshRSS refused \u2014 the next poll may undo it', 'error');
+        say(row, 'Changed here, but FreshRSS refused \u2014 the next poll may undo it',
+            'error', 'read');
       } else {
-        say(row, body.read ? 'Marked read' : 'Marked unread');
+        say(row, body.read ? 'Marked read' : 'Marked unread', 'info', 'read');
       }
     } catch (error) {
       setRead(row, was);
@@ -212,7 +270,8 @@
       if (!response.ok) throw new Error(failure(response.status));
       var body = await response.json();
       setQueued(row, body.queued);
-      say(row, body.queued ? 'Added to Listen Later' : 'Removed from Listen Later');
+      say(row, body.queued ? 'Added to Listen Later' : 'Removed from Listen Later',
+          'info', 'star');
     } catch (error) {
       setQueued(row, was);
       say(row, error.message || 'That did not save \u2014 try again', 'error');
@@ -233,6 +292,11 @@
   var suppressClick = false;
 
   list.addEventListener('click', function (event) {
+    var undo = event.target.closest('button[data-undo]');
+    if (undo) {
+      run(undo.closest('.row'), undo.dataset.undo);
+      return;
+    }
     var button = event.target.closest('button[data-action]');
     if (button) {
       run(button.closest('.row'), button.dataset.action);
@@ -260,12 +324,16 @@
     if (event.touches.length !== 1) return;
     var row = event.target.closest('.row');
     if (!row) return;
+    var startedAt = event.touches[0].clientX;
+    var width = document.documentElement.clientWidth;
+    if (startedAt <= EDGE_GUARD || startedAt >= width - EDGE_GUARD) return;
     gesture = {
       row: row,
       face: row.querySelector('[data-face]'),
       x: event.touches[0].clientX,
       y: event.touches[0].clientY,
       dx: 0,
+      action: null,
       engaged: false,
       abandoned: false
     };
@@ -286,11 +354,17 @@
       }
       if (Math.abs(dx) <= ENGAGE) return;
       gesture.engaged = true;
+      // The direction is decided once. Dragging back the other way then pulls
+      // the row towards its resting place and cancels, rather than crossing
+      // zero and arming the opposite action — swiping back should undo the
+      // swipe you are making, not perform the other one.
+      gesture.action = dx > 0 ? 'read' : 'star';
+      gesture.row.setAttribute('data-reveal', gesture.action);
       gesture.row.classList.add('dragging');
     }
     event.preventDefault();
-    gesture.dx = damped(dx);
-    gesture.row.setAttribute('data-reveal', gesture.dx > 0 ? 'read' : 'star');
+    var travel = gesture.action === 'read' ? Math.max(0, dx) : Math.min(0, dx);
+    gesture.dx = damped(travel);
     gesture.face.style.transform = 'translate3d(' + gesture.dx + 'px,0,0)';
   }, { passive: false });
 
@@ -306,7 +380,7 @@
     // than vanishing the instant the finger lifts.
     window.setTimeout(function () { it.row.removeAttribute('data-reveal'); }, 260);
     if (commit && Math.abs(it.dx) >= COMMIT) {
-      run(it.row, it.dx > 0 ? 'read' : 'star');
+      run(it.row, it.action);
     }
   }
 

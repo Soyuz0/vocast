@@ -1,10 +1,18 @@
 {% extends "mobile_base.html" %}
 {% block title %}Vocast{% endblock %}
 
-{% block header %}
-<header class="nav plain">
-  <h1 class="largetitle">Vocast</h1>
-</header>
+{% block navtitle %}<h1 class="largetitle">Vocast</h1>{% endblock %}
+
+{% block styles %}
+/* Status rows borrow the library page's colour language, so a green dot means
+   the same thing on a phone as it does on a desktop. */
+.status-dot{width:9px;height:9px;border-radius:50%;background:var(--text-grey);display:block}
+.status-dot.ready{background:var(--success)}
+.status-dot.failed{background:var(--error)}
+.status-dot.processing{background:var(--warning);animation:pulse 1.4s ease-in-out infinite}
+.status-dot.ignored,.status-dot.expired{background:var(--text-dark-grey)}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.item .glyph.dotcell{display:flex;align-items:center;justify-content:center}
 {% endblock %}
 
 {% block content %}
@@ -26,7 +34,23 @@
 </div>
 
 <div class="group">
-  <h2 id="publications-heading">Publications</h2>
+  <h2>Status</h2>
+  <div class="card">
+    {% for status in statuses %}
+    <a class="item" href="{{ destination(status=status.value) }}">
+      <span class="glyph dotcell" aria-hidden="true">
+        <span class="status-dot {{ status.value }}"></span>
+      </span>
+      <span class="label">{{ status.label }}</span>
+      <span class="n">{{ status.count }}</span>
+      <span class="disclosure" aria-hidden="true"></span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="group">
+  <h2>Publications</h2>
   {% if publications %}
   <div class="card">
     {% for publication in publications %}

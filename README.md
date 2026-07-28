@@ -505,21 +505,41 @@ heard and does not remove it automatically.
 iOS reader rather than a narrower version of `/library`. It exists alongside
 `/library`, which is unchanged.
 
-- `/m` lists where you can go: **Library** (everything), **Listen Later**, then
-  every publication with its count.
+- `/m` lists where you can go, in three groups: **Library** (everything) and
+  **Listen Later**; then the pipeline **statuses**; then every publication.
 - `/m/articles` lists the articles for whatever you tapped, as dense rows.
   `?origin_id=` selects a publication, `?playlist=listen-later` the queue,
-  `?search=` narrows within the selection, and `?filter=` is `unread`, `read`,
-  or `all`. Unread is the default, and the counts on `/m` follow the same
-  filter.
+  `?status=` one pipeline status, and `?search=` narrows within the selection.
+
+The bottom toolbar carries a three-way **unread / read / all** segmented
+control. It is the one filter that applies everywhere: every count on `/m` —
+Library, Listen Later, each status and each publication — is counted under it,
+so the numbers always add up to the number beside Library. Unread is the
+default. Status and the read filter compose, so "ready and unread" is one tap
+from "ready". Ready, processing, pending and failed are always listed, even at
+zero; ignored and expired appear only when they hold something. Publications
+with nothing matching drop out of the list entirely.
+
+Each row shows how long its narration runs, once there is one: a duration for a
+finished episode, a progress bar while it is being narrated, and nothing at all
+for an article the worker has not reached. Tapping a row opens the original
+article in a new tab.
 
 Swipe a row right to toggle read, left to toggle Listen Later. Both actions are
 also plain buttons — the unread dot on the left, the star on the right — so
-neither needs a gesture. Tapping a row opens the original article in a new tab.
+neither needs a gesture, and an Undo appears beside the row after either one.
+The gesture keeps whichever direction it started in, so dragging back cancels
+rather than performing the other action, and it will not start within about
+28px of either screen edge, which is left to Safari's own back and forward
+swipes. Rows never disappear on their own: marking one read while the unread
+filter is showing leaves it in place, dimmed, so the list does not resequence
+under your thumb. **Refresh**, top right on both pages, pulls read state from
+FreshRSS and reloads, which is what reconciles the page with the filter.
 
 There is no player here. This view is for triage; listening happens in a podcast
-app subscribed to the feed. The list, the filter, and search are server-rendered
-and work without JavaScript; only the swipe gestures need it.
+app subscribed to the feed. The list, the filters, search and refresh are
+server-rendered and work without JavaScript; the swipes, the Undo and forcing
+the FreshRSS pull are what need it.
 
 Access follows the same rule as everything else: nothing is required from the
 tailnet, and a request arriving through Funnel needs the feed token. Open

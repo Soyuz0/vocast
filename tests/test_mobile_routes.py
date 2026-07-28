@@ -11,7 +11,7 @@ from vocast import library
 from vocast.ingest.api import ServiceState
 from vocast.ingest.config import Config, DatabaseConfig, ServerConfig, StorageConfig
 from vocast.ingest.context import AppContext
-from vocast.ingest.models import FeedEntry
+from vocast.ingest.models import EntryStatus, FeedEntry
 from vocast.ingest.timeutils import to_iso, utcnow
 from vocast.server import create_app
 
@@ -44,6 +44,9 @@ def _add_entry(
     title: str,
     origin: str = "Example Publication",
     url: str = "https://articles.example.com/read?one=1&two=2",
+    status: EntryStatus = EntryStatus.PENDING,
+    duration_seconds: float | None = None,
+    progress: tuple[int, int] | None = None,
     read: bool = False,
     queued: bool = False,
 ):
@@ -63,6 +66,17 @@ def _add_entry(
             origin_name=origin,
         )
     )
+    if status is EntryStatus.READY:
+        context.entries.mark_ready(
+            entry.id,
+            episode_id=f"episode-{entry.id}",
+            duration_seconds=duration_seconds,
+            audio_bytes=1000,
+        )
+    elif status is not EntryStatus.PENDING:
+        context.entries.set_status(entry.id, status)
+    if progress is not None:
+        context.entries.record_progress(entry.id, *progress)
     if read:
         with context.db.transaction() as conn:
             conn.execute(
@@ -177,6 +191,130 @@ def test_sources_page_lists_both_destinations_and_every_publication(
     assert f"{ARTICLES_PAGE}?filter=unread&amp;origin_id=daily+news" in body
 
 
+@pytest.mark.parametrize("path", [SOURCES_PAGE, ARTICLES_PAGE])
+def test_refresh_is_reachable_from_both_pages_and_reloads_without_javascript(
+    client: TestClient, context: AppContext, path: str
+):
+    """Falls back to a plain reload; the script upgrades it to force the sync."""
+    _add_entry(context, title="An article")
+
+    body = client.get(path, params={"filter": "all"}).text
+    control = _tag(body, "data-refresh")
+
+    assert control.startswith("<a")
+    assert f'href="{path}?filter=all"' in control
+    assert 'aria-label="Refresh"' in control
+    assert "/api/read-sync" in body
+
+
+def test_refresh_returns_to_the_page_it_was_pressed_on(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="An article", origin="Daily News")
+
+    control = _tag(
+        client.get(
+            ARTICLES_PAGE, params={"origin_id": "daily news", "search": "article"}
+        ).text,
+        "data-refresh",
+    )
+
+    assert "origin_id=daily+news" in control
+    assert "search=article" in control
+
+
+def test_sources_page_lists_the_pipeline_statuses_with_counts(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="Narrated", status=EntryStatus.READY)
+    _add_entry(context, title="Broken", status=EntryStatus.FAILED)
+
+    body = client.get(SOURCES_PAGE).text
+
+    assert _count_beside(body, "Ready") == 1
+    assert _count_beside(body, "Failed") == 1
+    assert _count_beside(body, "Pending") == 0
+    assert _count_beside(body, "Processing") == 0
+    assert f"{ARTICLES_PAGE}?filter=unread&amp;status=ready" in body
+
+
+def test_end_state_statuses_are_listed_only_when_they_hold_something(
+    client: TestClient, context: AppContext
+):
+    """Nobody is waiting on an ignored article, so an empty row is furniture."""
+    _add_entry(context, title="Narrated", status=EntryStatus.READY)
+
+    without = client.get(SOURCES_PAGE).text
+    _add_entry(context, title="Skipped", status=EntryStatus.IGNORED)
+    with_ignored = client.get(SOURCES_PAGE).text
+
+    assert "Ignored" not in without
+    assert "Expired" not in without
+    assert _count_beside(with_ignored, "Ignored") == 1
+    assert "Expired" not in with_ignored
+
+
+def test_the_status_group_sits_between_the_destinations_and_the_publications(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="Narrated", origin="Daily News")
+
+    body = client.get(SOURCES_PAGE).text
+
+    assert body.index("Listen Later") < body.index(">Status<")
+    assert body.index(">Status<") < body.index(">Publications<")
+
+
+def test_status_counts_follow_the_active_filter(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="Narrated and read", status=EntryStatus.READY, read=True)
+    _add_entry(context, title="Narrated", status=EntryStatus.READY)
+
+    unread = client.get(SOURCES_PAGE, params={"filter": "unread"}).text
+    read = client.get(SOURCES_PAGE, params={"filter": "read"}).text
+    everything = client.get(SOURCES_PAGE, params={"filter": "all"}).text
+
+    assert _count_beside(unread, "Ready") == 1
+    assert _count_beside(read, "Ready") == 1
+    assert _count_beside(everything, "Ready") == 2
+
+
+def test_a_status_page_narrows_to_that_status(client: TestClient, context: AppContext):
+    _add_entry(context, title="Narrated", status=EntryStatus.READY)
+    _add_entry(context, title="Broken", status=EntryStatus.FAILED)
+
+    body = client.get(ARTICLES_PAGE, params={"status": "failed"}).text
+
+    assert "Broken" in body
+    assert "Narrated" not in body
+    assert '<h1 class="largetitle">Failed</h1>' in body
+
+
+def test_status_and_the_read_filter_compose(client: TestClient, context: AppContext):
+    _add_entry(context, title="Narrated and read", status=EntryStatus.READY, read=True)
+    _add_entry(context, title="Narrated", status=EntryStatus.READY)
+    _add_entry(context, title="Broken", status=EntryStatus.FAILED)
+
+    body = client.get(ARTICLES_PAGE, params={"status": "ready", "filter": "read"}).text
+
+    assert "Narrated and read" in body
+    assert ">Narrated<" not in body
+    assert "Broken" not in body
+
+
+def test_an_unrecognised_status_falls_back_to_the_whole_library(
+    client: TestClient, context: AppContext
+):
+    """A shared link should still show a library, not an error page."""
+    _add_entry(context, title="An article")
+
+    body = client.get(ARTICLES_PAGE, params={"status": "half-baked"}).text
+
+    assert "An article" in body
+    assert '<h1 class="largetitle">Library</h1>' in body
+
+
 def test_publications_are_listed_alphabetically(
     client: TestClient, context: AppContext
 ):
@@ -268,20 +406,46 @@ def test_showing_all_includes_read_and_unread(client: TestClient, context: AppCo
     assert "Already read" in body
 
 
-def test_the_filter_toggle_cycles_unread_read_all(
-    client: TestClient, context: AppContext
+def _segments(body: str) -> list[tuple[str, str, bool]]:
+    """The (href, label, selected) of each filter segment, in rendered order."""
+    return [
+        (href, label.strip(), 'aria-current="true"' in attributes)
+        for href, attributes, label in re.findall(
+            r'<a class="seg" href="([^"]+)"([^>]*)>([^<]+)</a>', body
+        )
+    ]
+
+
+@pytest.mark.parametrize("path", [SOURCES_PAGE, ARTICLES_PAGE])
+def test_each_filter_is_one_tap_away_and_the_active_one_is_marked(
+    client: TestClient, context: AppContext, path: str
 ):
+    """Cycling made two of the three destinations cost two taps and a guess."""
     _add_entry(context, title="An article")
 
-    def next_filter(active: str) -> str:
-        body = client.get(ARTICLES_PAGE, params={"filter": active}).text
-        marker = 'class="filter" data-filter="' + active + '" href="'
-        start = body.index(marker) + len(marker)
-        return body[start : body.index('"', start)]
+    segments = _segments(client.get(path, params={"filter": "read"}).text)
 
-    assert next_filter("unread").endswith("filter=read")
-    assert next_filter("read").endswith("filter=all")
-    assert next_filter("all").endswith("filter=unread")
+    assert [label for _, label, _ in segments] == ["Unread", "Read", "All"]
+    assert [selected for _, _, selected in segments] == [False, True, False]
+    assert [href.rsplit("filter=", 1)[1].split("&")[0] for href, _, _ in segments] == [
+        "unread",
+        "read",
+        "all",
+    ]
+
+
+def test_filter_segments_keep_the_selection_they_were_tapped_from(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="An article", origin="Daily News")
+
+    body = client.get(
+        ARTICLES_PAGE, params={"origin_id": "daily news", "status": "pending"}
+    ).text
+
+    for href, _, _ in _segments(body):
+        assert "origin_id=daily+news" in href
+        assert "status=pending" in href
 
 
 def test_an_unrecognised_filter_falls_back_to_unread(
@@ -309,6 +473,78 @@ def test_cards_open_the_original_article_in_a_new_tab(
     assert 'href="https://articles.example.com/read?one=1&amp;two=2"' in card
     assert 'target="_blank"' in card
     assert 'rel="noopener noreferrer"' in card
+
+
+def _meta_of(body: str, title: str) -> str:
+    """The metadata line rendered under one article's title."""
+    after = body.split(f'<span class="title">{title}</span>', 1)
+    assert len(after) == 2, f"no row titled {title!r}"
+    return after[1].split("</a>", 1)[0]
+
+
+def test_a_narrated_article_shows_how_long_it_runs(
+    client: TestClient, context: AppContext
+):
+    _add_entry(
+        context, title="Narrated", status=EntryStatus.READY, duration_seconds=1500
+    )
+
+    meta = _meta_of(client.get(ARTICLES_PAGE).text, "Narrated")
+
+    assert "25 min" in meta
+
+
+def test_a_very_short_narration_is_still_a_minute(
+    client: TestClient, context: AppContext
+):
+    """Rounding to the nearest minute would report a 20-second clip as 0 min."""
+    _add_entry(context, title="Brief", status=EntryStatus.READY, duration_seconds=20)
+
+    assert "1 min" in _meta_of(client.get(ARTICLES_PAGE).text, "Brief")
+
+
+def test_an_article_being_narrated_shows_its_progress(
+    client: TestClient, context: AppContext
+):
+    _add_entry(
+        context,
+        title="Halfway",
+        status=EntryStatus.PROCESSING,
+        progress=(5, 10),
+    )
+
+    meta = _meta_of(client.get(ARTICLES_PAGE).text, "Halfway")
+
+    assert "50%" in meta
+    assert 'aria-valuenow="50"' in meta
+    assert " min" not in meta
+
+
+def test_an_article_claimed_but_not_yet_started_says_only_that(
+    client: TestClient, context: AppContext
+):
+    """progress_percent is None until the first chunk lands and for single-chunk
+    articles, and a bar reading 0% would be worse than saying it is running."""
+    _add_entry(context, title="Just claimed", status=EntryStatus.PROCESSING)
+
+    meta = _meta_of(client.get(ARTICLES_PAGE).text, "Just claimed")
+
+    assert "narrating" in meta
+    assert "%" not in meta
+    assert " min" not in meta
+
+
+@pytest.mark.parametrize("status", [EntryStatus.PENDING, EntryStatus.FAILED])
+def test_an_article_with_no_audio_shows_no_length_at_all(
+    client: TestClient, context: AppContext, status: EntryStatus
+):
+    _add_entry(context, title="Nothing yet", status=status)
+
+    meta = _meta_of(client.get(ARTICLES_PAGE).text, "Nothing yet")
+
+    assert " min" not in meta
+    assert "%" not in meta
+    assert "narrating" not in meta
 
 
 def test_the_mobile_ui_offers_no_way_to_listen(client: TestClient, context: AppContext):
@@ -364,6 +600,33 @@ def test_both_swipe_actions_have_a_button_a_thumb_can_find(
     assert star_button.startswith("<button")
     assert 'aria-pressed="true"' in star_button
     assert "Remove from Listen Later: Saved and read" in star_button
+
+
+def test_the_row_swipe_cedes_the_screen_edges_to_the_browser(
+    client: TestClient, context: AppContext
+):
+    """Safari's back swipe starts at the edge and cannot be cancelled once it
+    has begun, so the row gesture has to decline to start there."""
+    _add_entry(context, title="An article")
+
+    body = client.get(ARTICLES_PAGE).text
+
+    assert "startedAt <= EDGE_GUARD" in body
+    assert "startedAt >= width - EDGE_GUARD" in body
+    assert "back gesture" in body  # said on screen, not only in the source
+
+
+def test_a_swipe_keeps_the_direction_it_started_in(
+    client: TestClient, context: AppContext
+):
+    """Dragging back should cancel the swipe, not arm the opposite action."""
+    _add_entry(context, title="An article")
+
+    body = client.get(ARTICLES_PAGE).text
+
+    assert "gesture.action = dx > 0 ? 'read' : 'star';" in body
+    assert "gesture.action === 'read' ? Math.max(0, dx) : Math.min(0, dx)" in body
+    assert "run(it.row, it.action);" in body
 
 
 def test_article_rows_carry_the_state_the_swipe_toggles(

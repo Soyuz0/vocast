@@ -16,6 +16,7 @@
   --bg-1:#14141D; --bg-2:#212029; --bg-3:#2C2B34; --bg-4:#414048;
   --text-white:#FFF; --text-grey:#808080; --text-dark-grey:#4F4F4F;
   --tint:#72BBFF; --accent:#4037F0; --star:#F5963D; --success:#34C5A2; --error:#F86060;
+  --warning:#F5963D;
   --hairline:rgba(255,255,255,.09);
   --chrome:rgba(20,20,29,.82);
   --font-ios:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,system-ui,sans-serif;
@@ -52,8 +53,17 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .largetitle{margin:0;padding:2px 16px 10px;font-size:34px;line-height:41px;
   font-weight:700;letter-spacing:-.02em}
-.nav.plain .largetitle{padding-top:12px}
 .subtitle{padding:0 16px 12px;margin:-6px 0 0;color:var(--text-grey);font-size:14px}
+/* Pinned to the trailing edge of both pages' bars. A link, not a button, so a
+   tap still reloads the page with JavaScript off; the script upgrades it to
+   pull read state from the reader first. */
+.refresh{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;
+  width:44px;height:44px;flex:none;color:var(--tint);font-size:21px;line-height:1}
+.refresh:active{opacity:.5}
+.refresh .arrow{display:block}
+.refresh[data-busy="true"]{color:var(--text-grey);pointer-events:none}
+.refresh[data-busy="true"] .arrow{animation:spin 900ms linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 /* ---- grouped list, page one ---- */
 .group{margin:18px 16px 0}
@@ -81,13 +91,22 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   align-items:center;height:var(--toolbar-height);padding:0 8px}
 .toolbar .status{font-size:12px;color:var(--text-grey);padding-left:8px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
-.filter{display:inline-flex;align-items:center;justify-content:center;gap:7px;
-  min-height:34px;min-width:112px;padding:0 14px;border-radius:999px;
-  background:var(--bg-3);color:var(--text-white);font-size:14px;font-weight:600}
-.filter:active{background:var(--bg-4)}
-.filter .swatch{width:9px;height:9px;border-radius:50%;background:var(--tint)}
-.filter[data-filter="read"] .swatch{background:var(--text-dark-grey)}
-.filter[data-filter="all"] .swatch{background:var(--success)}
+/* An iOS segmented control: one tap per destination rather than cycling
+   through the two you did not want to reach the one you did. */
+.segmented{display:inline-flex;align-items:stretch;gap:2px;padding:2px;
+  border-radius:9px;background:var(--bg-3)}
+.seg{display:inline-flex;align-items:center;justify-content:center;
+  min-height:30px;padding:0 11px;border-radius:7px;
+  color:var(--text-white);font-size:13px;font-weight:500;white-space:nowrap}
+.seg:active{opacity:.6}
+.seg[aria-current="true"]{background:var(--bg-4);font-weight:600;
+  box-shadow:0 1px 2px rgba(0,0,0,.45)}
+/* Three segments, a count and a search button is a lot for a 320px phone;
+   the segments give up padding before the count gives up characters. */
+@media (max-width:360px){
+  .seg{padding:0 8px;font-size:12px}
+  .toolbar .status{font-size:11px}
+}
 .searchpop{justify-self:end}
 .searchpop>summary{display:flex;align-items:center;justify-content:center;
   width:44px;height:44px;list-style:none;color:var(--tint);cursor:pointer}
@@ -117,16 +136,28 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 </style>
 </head>
 <body data-base-path="{{ base_path }}">
-{% block header %}{% endblock %}
+{% block header %}
+<header class="nav">
+  <div class="bar">
+    {% block navleading %}{% endblock %}
+    <a class="refresh" href="{{ self_url }}" data-refresh aria-label="Refresh">
+      <span class="arrow" aria-hidden="true">&#8635;</span>
+    </a>
+  </div>
+  {% block navtitle %}{% endblock %}
+</header>
+{% endblock %}
 {% block content %}{% endblock %}
 
 <nav class="toolbar" aria-label="Library controls">
   <div class="bar">
     <span class="status">{% block toolbar_status %}{% endblock %}</span>
-    <a class="filter" data-filter="{{ active_filter }}" href="{{ filter_url }}"
-       aria-label="Showing {{ filter_label|lower }} articles. Activate to change the filter.">
-      <span class="swatch" aria-hidden="true"></span>{{ filter_label }}
-    </a>
+    <div class="segmented" role="group" aria-label="Show">
+      {% for option in filters %}
+      <a class="seg" href="{{ option.url }}"
+         {% if option.active %}aria-current="true"{% endif %}>{{ option.label }}</a>
+      {% endfor %}
+    </div>
     <details class="searchpop" data-searchpop {% if search_value %}open{% endif %}>
       <summary aria-label="Search"><span class="glass" aria-hidden="true"></span></summary>
       <div class="pop">
@@ -139,7 +170,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
                  placeholder="Search articles" autocomplete="off" autocapitalize="none">
           <button type="submit">Search</button>
           {% if search_value %}
-          <a class="clear" href="{{ search_action }}?filter={{ active_filter }}">Clear</a>
+          <a class="clear" href="{{ search_clear_url }}">Clear</a>
           {% endif %}
         </form>
       </div>
@@ -154,6 +185,25 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   var pop = document.querySelector('[data-searchpop]');
   if (pop) pop.addEventListener('toggle', function () {
     if (pop.open) pop.querySelector('input[type="search"]').focus();
+  });
+
+  // Refresh means "show me what the reader thinks now". Reloading alone would
+  // not do it: the page-load sync is throttled, so pressing this a minute after
+  // marking things read in FreshRSS would redraw the same stale flags. Force
+  // the pull first, then reload — and reload even if the pull fails, because
+  // the reload is the request and the sync is a courtesy.
+  var refresh = document.querySelector('[data-refresh]');
+  if (refresh) refresh.addEventListener('click', async function (event) {
+    event.preventDefault();
+    refresh.setAttribute('data-busy', 'true');
+    try {
+      await fetch(document.body.dataset.basePath + '/api/read-sync', {
+        method: 'POST', credentials: 'same-origin'
+      });
+    } catch (error) {
+      /* offline, or the reader is down; the reload still shows current state */
+    }
+    location.reload();
   });
 })();
 </script>
