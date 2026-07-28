@@ -485,12 +485,11 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
           {{ '&#10003;' | safe if item.queued else '+' }}
         </button>
         <div>
-          {% if item.episode_id %}
-          <button class="title" type="button" data-play data-entry-id="{{ item.entry_id }}"
-                  data-episode="{{ item.episode_id }}" data-title="{{ item.title }}">{{ item.title }}</button>
-          {% else %}
+          {# The title is text, not a control. Clicking a row used to start
+             playback, which is easy to trigger while reading the list; the play
+             button beside the row is the deliberate way to listen, and Original
+             below opens the article. #}
           <span class="title">{{ item.title }}</span>
-          {% endif %}
           <div class="byline">
             <span>{{ item.origin_name }}</span>
             {% if item.author %}<span class="sep">&middot;</span><span>{{ item.author }}</span>{% endif %}

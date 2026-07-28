@@ -735,3 +735,25 @@ def test_the_read_toggle_appears_once_per_breakpoint(
     assert "data-read-toggle" not in before_group
     assert mobile_part.count("data-read-toggle") == 1, "one inside the mobile group"
     assert desktop_part.count("data-read-toggle") == 1, "one in the desktop column"
+
+
+def test_clicking_an_article_title_does_nothing(
+    client: TestClient, context: AppContext
+):
+    """The title used to be a play button, which is easy to hit while reading the
+    list. Listening is the play button's job; the title is just text."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert 'class="title" type="button"' not in body
+    assert '<span class="title">' in body
+
+
+def test_the_dedicated_play_button_still_starts_playback(
+    client: TestClient, context: AppContext
+):
+    """Removing the accident must not remove the intent."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert 'class="play" type="button" data-play' in body

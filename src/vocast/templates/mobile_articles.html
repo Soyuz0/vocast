@@ -66,8 +66,6 @@
 .msg[data-tone="error"]{color:var(--error)}
 .msg .undo{color:var(--tint);font-size:12px;text-decoration:underline;padding:2px 0}
 
-.hint{margin:0;padding:10px 16px 2px;font-size:12px;color:var(--text-dark-grey)}
-.hint[hidden]{display:none}
 .pager{display:flex;align-items:center;justify-content:space-between;gap:12px;
   padding:20px 16px calc(env(safe-area-inset-bottom) + 12px)}
 .pager .pos{color:var(--text-grey);font-size:13px}
@@ -87,8 +85,6 @@
 
 {% block content %}
 {% if page.items %}
-<p class="hint" data-hint hidden>Swipe a row right to toggle read, left to star.
-  The screen edges are left free for Safari&rsquo;s back gesture.</p>
 <ul class="rows" data-rows aria-label="{{ title }} articles">
   {% for item in page.items %}
   <li class="row" data-entry-id="{{ item.entry_id }}" data-title="{{ item.title }}"
@@ -187,9 +183,6 @@
   Array.prototype.forEach.call(list.querySelectorAll('button[data-action]'), function (button) {
     button.disabled = false;
   });
-  var hint = document.querySelector('[data-hint]');
-  if (hint) hint.hidden = false;
-
   var ENGAGE = 12;  // horizontal travel before the row, rather than the page, takes the gesture
   var COMMIT = 76;  // travel past which releasing performs the action
 

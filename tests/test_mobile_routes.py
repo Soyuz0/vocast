@@ -763,7 +763,6 @@ def test_the_row_swipe_cedes_the_screen_edges_to_the_browser(
 
     assert "startedAt <= EDGE_GUARD" in body
     assert "startedAt >= width - EDGE_GUARD" in body
-    assert "back gesture" in body  # said on screen, not only in the source
 
 
 def test_a_swipe_keeps_the_direction_it_started_in(
@@ -821,3 +820,16 @@ def test_paging_keeps_the_selection_and_the_filter(
 
     assert "Page 1 of 2" in body
     assert "filter=unread&amp;origin_id=daily+news&amp;page=2" in body
+
+
+def test_the_article_list_carries_no_swipe_instructions(
+    client: TestClient, context: AppContext
+):
+    """The gestures are discoverable by trying them; a standing line of prose
+    above the list is read once and then only takes up room."""
+    _add_entry(context, title="An article")
+
+    body = client.get(ARTICLES_PAGE).text
+
+    assert "Swipe" not in body
+    assert "data-hint" not in body
