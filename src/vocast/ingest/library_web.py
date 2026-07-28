@@ -28,7 +28,7 @@ DURATION_BUCKETS = (
 
 
 @lru_cache(maxsize=1)
-def _templates() -> Environment:
+def templates() -> Environment:
     return Environment(
         loader=PackageLoader("vocast", "templates"),
         autoescape=select_autoescape(("html", "xml")),
@@ -60,7 +60,7 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
         # the remaining case: turning a ?token= into a cookie so the browser
         # keeps working as you navigate.
         if token or request.url.path.endswith("/public/library"):
-            redirect = _require_library_token(state, request, token)
+            redirect = require_page_token(state, request, token, page_path="/library")
             if redirect is not None:
                 return redirect
         # Bring the read flags in line before querying, so the page agrees with
@@ -94,7 +94,7 @@ def register_library(router: APIRouter, state: ServiceState) -> None:
             if key not in ("page", "token") and value != ""
         }
         html = (
-            _templates()
+            templates()
             .get_template("library.html")
             .render(
                 page=result,
@@ -124,9 +124,15 @@ def _is_secure(request: Request) -> bool:
     return request.url.scheme == "https"
 
 
-def _require_library_token(
-    state: ServiceState, request: Request, supplied: str | None
+def require_page_token(
+    state: ServiceState, request: Request, supplied: str | None, *, page_path: str
 ) -> Response | None:
+    """Trade a ?token= for a cookie, so links within the page keep working.
+
+    page_path is where to send the browser afterwards: the token is stripped
+    from the URL rather than left in history, and every page that can be opened
+    from a tokenised link needs its own landing path.
+    """
     expected = state.context.config.server.feed_token
     if not expected:
         return None
@@ -144,7 +150,7 @@ def _require_library_token(
         if key != "token"
     ]
     query = urlencode(query_values)
-    location = f"{base_path}/library"
+    location = f"{base_path}{page_path}"
     if query:
         location = f"{location}?{query}"
     response = RedirectResponse(location, status_code=303)
