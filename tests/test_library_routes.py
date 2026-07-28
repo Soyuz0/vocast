@@ -305,18 +305,19 @@ def test_library_is_open_on_the_tailnet(client: TestClient, context: AppContext)
     assert "An article" in response.text
 
 
-def test_library_requires_the_token_from_the_internet(
+def test_the_library_is_not_reachable_from_the_internet_at_all(
     client: TestClient, context: AppContext
 ):
-    """Funnel publishes every path, so the library is reachable publicly."""
+    """Only the podcast is published. The library is for the tailnet, so the
+    token does not buy access to it either."""
     _add_entry(context)
     context.config = replace(
         context.config,
         server=replace(context.config.server, feed_token="feed-secret"),
     )
 
-    assert client.get("/library", headers=FUNNEL).status_code == 401
-    assert client.get("/library?token=feed-secret", headers=FUNNEL).status_code != 401
+    assert client.get("/library", headers=FUNNEL).status_code == 404
+    assert client.get("/library?token=feed-secret", headers=FUNNEL).status_code == 404
 
 
 def test_library_is_open_when_no_token_is_configured(
@@ -385,20 +386,35 @@ def test_login_cookie_is_secure_behind_a_tls_proxy(
 # --- the public surface as a whole -----------------------------------------
 
 
-@pytest.mark.parametrize(
-    "path", ["/", "/library", "/api/health", "/feeds/all.xml", "/feed.xml"]
-)
-def test_every_path_needs_the_token_from_the_internet(
+@pytest.mark.parametrize("path", ["/", "/library", "/m", "/api/health"])
+def test_anything_but_the_podcast_is_absent_from_the_internet(
     client: TestClient, context: AppContext, path: str
 ):
-    """The guard is app-wide on purpose: Funnel exposes every path, including
-    ones added later, so allow-listing individual routes would leak by
-    omission."""
+    """The guard is app-wide on purpose, so a route added later is private by
+    default rather than by remembering. 404 rather than 403, because a refusal
+    would confirm there is something here to find."""
     context.config = replace(
         context.config,
         server=replace(context.config.server, feed_token="feed-secret"),
     )
+    assert client.get(path, headers=FUNNEL).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "path", ["/feeds/all.xml", "/feed.xml", "/feeds/recent.xml", "/cover.jpg"]
+)
+def test_the_podcast_itself_is_published_but_needs_the_token(
+    client: TestClient, context: AppContext, path: str
+):
+    """A podcast client cannot send an Authorization header, so the secret
+    travels in the URL. These paths exist from the internet; the rest do not."""
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, feed_token="feed-secret"),
+    )
+
     assert client.get(path, headers=FUNNEL).status_code == 401
+    assert client.get(f"{path}?token=feed-secret", headers=FUNNEL).status_code != 401
 
 
 @pytest.mark.parametrize("path", ["/", "/library", "/api/health"])
@@ -415,7 +431,7 @@ def test_those_same_paths_stay_open_on_the_tailnet(
 def test_the_marker_cannot_be_used_to_bypass_anything(
     client: TestClient, context: AppContext
 ):
-    """Claiming to be a Funnel request only ever adds a requirement."""
+    """Claiming to be a Funnel request only ever takes access away."""
     context.config = replace(
         context.config,
         server=replace(context.config.server, feed_token="feed-secret"),
@@ -424,15 +440,17 @@ def test_the_marker_cannot_be_used_to_bypass_anything(
         client.get(
             "/api/health", headers={"Tailscale-Funnel-Request": "?0"}
         ).status_code
-        == 401
+        == 404
     )
 
 
-def test_no_token_configured_leaves_the_internet_path_open(
+def test_the_private_surface_is_closed_even_with_no_token_configured(
     client: TestClient, context: AppContext
 ):
-    """Nothing to enforce, so a deployment without a token is unchanged."""
-    assert client.get("/api/health", headers=FUNNEL).status_code == 200
+    """The token governs the podcast. What is private is private regardless, so
+    forgetting to set a token cannot expose the library."""
+    assert client.get("/api/health", headers=FUNNEL).status_code == 404
+    assert client.get("/library", headers=FUNNEL).status_code == 404
 
 
 # --- the mobile direction --------------------------------------------------

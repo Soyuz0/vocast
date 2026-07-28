@@ -151,32 +151,38 @@ def test_mobile_pages_render_on_the_tailnet(
 
 
 @pytest.mark.parametrize("path", [SOURCES_PAGE, ARTICLES_PAGE])
-def test_mobile_pages_need_the_token_from_the_internet(
+def test_the_phone_pages_are_not_reachable_from_the_internet(
     client: TestClient, context: AppContext, path: str
 ):
-    """Funnel publishes every path, so a new page is public the day it lands."""
+    """This is a reader for the tailnet. Only the podcast is published, and the
+    token does not buy access to anything else."""
     _add_entry(context, title="An article")
     _with_token(context)
 
-    assert client.get(path, headers=FUNNEL).status_code == 401
-    assert client.get(f"{path}?token=feed-secret", headers=FUNNEL).status_code != 401
+    assert client.get(path, headers=FUNNEL).status_code == 404
+    assert client.get(f"{path}?token=feed-secret", headers=FUNNEL).status_code == 404
 
 
 def test_a_token_in_the_url_becomes_a_cookie_so_navigation_keeps_working(
     client: TestClient, context: AppContext
 ):
-    """Links between the two pages carry no token; the cookie is what does."""
+    """Links between the two pages carry no token; the cookie is what does.
+
+    Exercised on the tailnet, which is the only place these pages are served.
+    The exchange still exists because a token in the URL should not linger in
+    history wherever it is used.
+    """
     _add_entry(context, title="An article")
     _with_token(context)
 
     landing = client.get(
-        f"{SOURCES_PAGE}?token=feed-secret", headers=FUNNEL, follow_redirects=False
+        f"{SOURCES_PAGE}?token=feed-secret", follow_redirects=False
     )
 
     assert landing.status_code == 303
     assert landing.headers["location"] == SOURCES_PAGE
     assert "feed-secret" not in landing.headers["location"]
-    assert client.get(ARTICLES_PAGE, headers=FUNNEL).status_code == 200
+    assert client.get(ARTICLES_PAGE).status_code == 200
 
 
 @pytest.mark.parametrize("path", [SOURCES_PAGE, ARTICLES_PAGE])

@@ -110,29 +110,36 @@ if [[ "$no_token" != "401" || "$bad_token" != "401" || "$good_token" != "200" ]]
 fi
 echo "  ok: 401 without a token, 200 with it"
 
-# Tailnet users open /library directly without a token. Funnel maps its public
-# /library path to this protected internal route instead.
-echo "verifying public library token enforcement..."
+# The library, the phone reader and the API are for the tailnet. Prove the
+# service itself refuses them from the internet before opening anything, so a
+# mistake in the funnel paths below is not the only thing standing in the way.
+echo "verifying the private surface is closed to the internet..."
+funnel_check() {
+  curl -s -o /dev/null --max-time 10 -H 'Tailscale-Funnel-Request: ?1' \
+    -w '%{http_code}' "$1"
+}
 private_library="$(check "http://127.0.0.1:${PORT}/library")"
-public_library_no_token="$(check "http://127.0.0.1:${PORT}/public/library")"
-public_library_bad_token="$(check "http://127.0.0.1:${PORT}/public/library?token=definitely-wrong")"
-public_library_good_token="$(check "http://127.0.0.1:${PORT}/public/library?token=${FEED_TOKEN}")"
+public_library="$(funnel_check "http://127.0.0.1:${PORT}/library?token=${FEED_TOKEN}")"
+public_mobile="$(funnel_check "http://127.0.0.1:${PORT}/m?token=${FEED_TOKEN}")"
+public_api="$(funnel_check "http://127.0.0.1:${PORT}/api/health")"
 
-if [[ "$private_library" != "200" || "$public_library_no_token" != "401" ||
-      "$public_library_bad_token" != "401" || "$public_library_good_token" != "303" ]]; then
+if [[ "$private_library" != "200" || "$public_library" != "404" ||
+      "$public_mobile" != "404" || "$public_api" != "404" ]]; then
   echo >&2
-  echo "ABORTING: library access separation is not enforced." >&2
+  echo "ABORTING: the private surface is reachable from the internet." >&2
   echo "  tailnet library=${private_library} (want 200)" >&2
-  echo "  public without token=${public_library_no_token} (want 401)" >&2
-  echo "  public bad token=${public_library_bad_token} (want 401)" >&2
-  echo "  public good token=${public_library_good_token} (want 303)" >&2
+  echo "  internet library=${public_library} (want 404, even with a token)" >&2
+  echo "  internet phone reader=${public_mobile} (want 404)" >&2
+  echo "  internet api=${public_api} (want 404)" >&2
   echo "The funnel was NOT changed." >&2
   exit 1
 fi
-echo "  ok: tailnet library open, public library token-protected"
+echo "  ok: library open on the tailnet, absent from the internet"
 
-# Do not publish the service root. Only podcast resources, the protected public
-# library route, and its admin-token-protected playlist actions need Funnel.
+# Publish the podcast and nothing else: the feed documents, the audio they
+# enclose, and the cover art, which is everything a podcast client fetches. The
+# library, the phone reader and the API stay on the tailnet, so the service root
+# is never published either.
 tailscale funnel --https=443 off >/dev/null 2>&1 || true
 tailscale funnel --bg --https=443 --set-path=/feeds \
   "http://127.0.0.1:${PORT}/feeds" >/dev/null
@@ -140,10 +147,6 @@ tailscale funnel --bg --https=443 --set-path=/feed.xml \
   "http://127.0.0.1:${PORT}/feed.xml" >/dev/null
 tailscale funnel --bg --https=443 --set-path=/cover.jpg \
   "http://127.0.0.1:${PORT}/cover.jpg" >/dev/null
-tailscale funnel --bg --https=443 --set-path=/library \
-  "http://127.0.0.1:${PORT}/public/library" >/dev/null
-tailscale funnel --bg --https=443 --set-path=/api/playlists \
-  "http://127.0.0.1:${PORT}/api/playlists" >/dev/null
 if [[ "$PUBLIC_AUDIO" == "1" ]]; then
   tailscale funnel --bg --https=443 --set-path=/audio \
     "http://127.0.0.1:${PORT}/audio" >/dev/null
