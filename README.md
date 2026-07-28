@@ -499,6 +499,35 @@ heard and does not remove it automatically.
 > fetch directly from the device (Apple Podcasts, Downcast) work fine with
 > Tailscale. This is also why `vocast init` exists for the Tailscale setup.
 
+## Reading on a phone
+
+`/m` is a second, phone-sized view of the same library, laid out like a native
+iOS reader rather than a narrower version of `/library`. It exists alongside
+`/library`, which is unchanged.
+
+- `/m` lists where you can go: **Library** (everything), **Listen Later**, then
+  every publication with its count.
+- `/m/articles` lists the articles for whatever you tapped, as dense rows.
+  `?origin_id=` selects a publication, `?playlist=listen-later` the queue,
+  `?search=` narrows within the selection, and `?filter=` is `unread`, `read`,
+  or `all`. Unread is the default, and the counts on `/m` follow the same
+  filter.
+
+Swipe a row right to toggle read, left to toggle Listen Later. Both actions are
+also plain buttons — the unread dot on the left, the star on the right — so
+neither needs a gesture. Tapping a row opens the original article in a new tab.
+
+There is no player here. This view is for triage; listening happens in a podcast
+app subscribed to the feed. The list, the filter, and search are server-rendered
+and work without JavaScript; only the swipe gestures need it.
+
+Access follows the same rule as everything else: nothing is required from the
+tailnet, and a request arriving through Funnel needs the feed token. Open
+`/m?token=...` once and Vocast stores it in the same HttpOnly cookie `/library`
+uses, then redirects to a clean `/m` so links between the two pages never carry
+the secret. `scripts/enable-public-feed.sh` does not publish `/m` through
+Funnel, so out of the box this view is reachable from the tailnet only.
+
 ## Running a manual poll
 
 ```

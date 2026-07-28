@@ -1,0 +1,317 @@
+{% extends "mobile_base.html" %}
+{% block title %}{{ title }} | Vocast{% endblock %}
+
+{% block styles %}
+/* ---- article rows ---- */
+.rows{list-style:none;margin:0;padding:0}
+.row{position:relative;overflow:hidden}
+.reveal{position:absolute;inset:0;display:flex;align-items:center;padding:0 22px;
+  font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  opacity:0;pointer-events:none;transition:opacity 140ms linear}
+.reveal-read{justify-content:flex-start;background:var(--accent);color:#fff}
+.reveal-star{justify-content:flex-end;background:var(--star);color:#231604}
+.row[data-reveal="read"] .reveal-read,
+.row[data-reveal="star"] .reveal-star{opacity:1}
+.rowface{position:relative;background:var(--bg-1);
+  transform:translate3d(0,0,0);transition:transform 260ms var(--ease-ios);
+  /* The browser keeps vertical scrolling; only the horizontal axis is ours. */
+  touch-action:pan-y}
+.row.dragging .rowface{transition:none}
+.row + .row .rowface::before{content:"";position:absolute;left:44px;right:0;top:0;height:1px;
+  background:var(--hairline)}
+.rowmain{display:flex;align-items:flex-start}
+
+.entry{flex:1;min-width:0;display:block;padding:12px 4px 13px 0;color:var(--text-white)}
+.entry .title{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+  overflow:hidden;font-size:16px;line-height:1.3;font-weight:600;letter-spacing:-.01em}
+.entry .meta{margin-top:4px;font-size:13px;line-height:1.25;color:var(--text-grey);
+  display:flex;flex-wrap:wrap;gap:5px;align-items:baseline}
+.entry .meta .sep{color:var(--text-dark-grey)}
+.entry .publication{color:var(--tint)}
+.row[data-read="true"] .entry .title{font-weight:500;color:var(--text-grey)}
+
+/* Both toggles are 44px targets that read as indicators: the pip is the unread
+   dot, the star is the Listen Later marker. They double as the reachable,
+   assistive-technology-friendly version of the two swipes. */
+.mark,.star{flex:none;width:44px;min-height:44px;display:flex;justify-content:center;
+  align-self:stretch;align-items:flex-start;padding-top:17px}
+.mark .pip{width:10px;height:10px;border-radius:50%;background:var(--tint);
+  transition:background 160ms ease,box-shadow 160ms ease}
+.row[data-read="true"] .mark .pip{background:transparent;box-shadow:inset 0 0 0 1.5px var(--bg-4)}
+.star{padding-top:12px;font-size:18px;line-height:1;color:var(--bg-4)}
+.row[data-queued="true"] .star{color:var(--star)}
+.mark:disabled,.star:disabled{cursor:default}
+.row[data-busy="true"] .rowface{opacity:.55}
+
+.msg{margin:0;padding:0 14px 9px 44px;font-size:12px;line-height:1.35;color:var(--text-grey)}
+.msg:empty{display:none}
+.msg[data-tone="error"]{color:var(--error)}
+
+.hint{margin:0;padding:10px 16px 2px;font-size:12px;color:var(--text-dark-grey)}
+.hint[hidden]{display:none}
+.pager{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:20px 16px calc(env(safe-area-inset-bottom) + 12px)}
+.pager .pos{color:var(--text-grey);font-size:13px}
+{% endblock %}
+
+{% block header %}
+<header class="nav">
+  <div class="bar">
+    <a class="back" href="{{ back_url }}"><span class="chev" aria-hidden="true"></span>Vocast</a>
+  </div>
+  <h1 class="largetitle">{{ title }}</h1>
+  {% if search_value %}<p class="subtitle">Results for &ldquo;{{ search_value }}&rdquo;</p>{% endif %}
+</header>
+{% endblock %}
+
+{% block content %}
+{% if page.items %}
+<p class="hint" data-hint hidden>Swipe right to toggle read, left to star.</p>
+<ul class="rows" data-rows aria-label="{{ title }} articles">
+  {% for item in page.items %}
+  <li class="row" data-entry-id="{{ item.entry_id }}" data-title="{{ item.title }}"
+      data-read="{{ 'true' if item.read_at else 'false' }}"
+      data-queued="{{ 'true' if item.queued else 'false' }}">
+    <div class="reveal reveal-read" aria-hidden="true">Read</div>
+    <div class="reveal reveal-star" aria-hidden="true">Star</div>
+    <div class="rowface" data-face>
+      <div class="rowmain">
+        <button class="mark" type="button" data-action="read" disabled
+                aria-pressed="{{ 'true' if item.read_at else 'false' }}"
+                aria-label="{{ 'Mark as unread' if item.read_at else 'Mark as read' }}: {{ item.title }}">
+          <span class="pip" aria-hidden="true"></span>
+        </button>
+        <a class="entry" href="{{ item.article_url }}" target="_blank" rel="noopener noreferrer">
+          <span class="title">{{ item.title }}</span>
+          <span class="meta">
+            <span class="publication">{{ item.origin_name }}</span>
+            {% if item.published_at %}
+            <span class="sep" aria-hidden="true">&middot;</span>
+            <span>{{ item.published_at.strftime('%b %d') if item.published_at.year == this_year
+                     else item.published_at.strftime('%b %d, %Y') }}</span>
+            {% endif %}
+          </span>
+        </a>
+        <button class="star" type="button" data-action="star" disabled
+                aria-pressed="{{ 'true' if item.queued else 'false' }}"
+                aria-label="{{ 'Remove from' if item.queued else 'Add to' }} Listen Later: {{ item.title }}">
+          <span aria-hidden="true">&#9733;</span>
+        </button>
+      </div>
+      <p class="msg" data-message role="status"></p>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+
+{% if page.pages > 1 %}
+<div class="pager">
+  {% if page.query.page > 1 %}
+  <a href="{{ page_url(page.query.page - 1) }}">&larr; Newer</a>
+  {% else %}<span></span>{% endif %}
+  <span class="pos">Page {{ page.query.page }} of {{ page.pages }}</span>
+  {% if page.query.page < page.pages %}
+  <a href="{{ page_url(page.query.page + 1) }}">Older &rarr;</a>
+  {% else %}<span></span>{% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty">
+  <strong>Nothing to read</strong>
+  <span>No {{ filter_label|lower }} articles here.</span>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block toolbar_status %}{{ page.total }} article{{ '' if page.total == 1 else 's' }}{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var basePath = document.body.dataset.basePath;
+  // No feed token here, deliberately: the same-origin cookie the browser
+  // already holds is what authorises these calls, and this page is open on the
+  // tailnet, so an embedded secret would be readable by anyone who can load it.
+  var list = document.querySelector('[data-rows]');
+  if (!list) return;
+
+  // Both are promises this page can only keep with a script running: without
+  // one the buttons would do nothing and the hint would describe a gesture
+  // that does nothing either.
+  Array.prototype.forEach.call(list.querySelectorAll('button[data-action]'), function (button) {
+    button.disabled = false;
+  });
+  var hint = document.querySelector('[data-hint]');
+  if (hint) hint.hidden = false;
+
+  var ENGAGE = 12;  // horizontal travel before the row, rather than the page, takes the gesture
+  var COMMIT = 76;  // travel past which releasing performs the action
+
+  function say(row, text, tone) {
+    var message = row.querySelector('[data-message]');
+    message.setAttribute('data-tone', tone || 'info');
+    message.textContent = text;
+  }
+
+  function setRead(row, read) {
+    row.dataset.read = read ? 'true' : 'false';
+    var button = row.querySelector('[data-action="read"]');
+    button.setAttribute('aria-pressed', read ? 'true' : 'false');
+    button.setAttribute('aria-label',
+      (read ? 'Mark as unread: ' : 'Mark as read: ') + row.dataset.title);
+  }
+
+  function setQueued(row, queued) {
+    row.dataset.queued = queued ? 'true' : 'false';
+    var button = row.querySelector('[data-action="star"]');
+    button.setAttribute('aria-pressed', queued ? 'true' : 'false');
+    button.setAttribute('aria-label',
+      (queued ? 'Remove from' : 'Add to') + ' Listen Later: ' + row.dataset.title);
+  }
+
+  function failure(status) {
+    if (status === 404) return 'That article no longer exists';
+    if (status === 401) return 'Session expired \u2014 reload with your token';
+    return 'That did not save \u2014 try again';
+  }
+
+  // Optimistic, then reconciled: the row moves under the finger immediately,
+  // but the server's answer is what it ends up showing, and a failure puts it
+  // back rather than leaving a lie on screen.
+  async function toggleRead(row) {
+    var was = row.dataset.read === 'true';
+    setRead(row, !was);
+    try {
+      var response = await fetch(
+        basePath + '/api/entries/' + row.dataset.entryId + '/read',
+        { method: was ? 'DELETE' : 'POST', credentials: 'same-origin' });
+      if (!response.ok) throw new Error(failure(response.status));
+      var body = await response.json();
+      setRead(row, body.read);
+      // Worth saying out loud: the reader is the source of truth, so a refusal
+      // here means the next poll will quietly put the article back.
+      if (body.upstream_failed) {
+        say(row, 'Changed here, but FreshRSS refused \u2014 the next poll may undo it', 'error');
+      } else {
+        say(row, body.read ? 'Marked read' : 'Marked unread');
+      }
+    } catch (error) {
+      setRead(row, was);
+      say(row, error.message || 'That did not save \u2014 try again', 'error');
+    }
+  }
+
+  async function toggleQueued(row) {
+    var was = row.dataset.queued === 'true';
+    setQueued(row, !was);
+    try {
+      var response = await fetch(
+        basePath + '/api/playlists/listen-later/entries/' + row.dataset.entryId,
+        { method: was ? 'DELETE' : 'POST', credentials: 'same-origin' });
+      if (!response.ok) throw new Error(failure(response.status));
+      var body = await response.json();
+      setQueued(row, body.queued);
+      say(row, body.queued ? 'Added to Listen Later' : 'Removed from Listen Later');
+    } catch (error) {
+      setQueued(row, was);
+      say(row, error.message || 'That did not save \u2014 try again', 'error');
+    }
+  }
+
+  async function run(row, action) {
+    if (row.dataset.busy === 'true') return;
+    row.dataset.busy = 'true';
+    say(row, '');
+    try {
+      await (action === 'read' ? toggleRead(row) : toggleQueued(row));
+    } finally {
+      row.dataset.busy = 'false';
+    }
+  }
+
+  var suppressClick = false;
+
+  list.addEventListener('click', function (event) {
+    var button = event.target.closest('button[data-action]');
+    if (button) {
+      run(button.closest('.row'), button.dataset.action);
+      return;
+    }
+    // A swipe that ends over the card would otherwise also open the article.
+    if (suppressClick) {
+      suppressClick = false;
+      event.preventDefault();
+    }
+  });
+
+  var gesture = null;
+
+  function damped(dx) {
+    var slack = COMMIT * 1.6;
+    var over = Math.abs(dx) - slack;
+    if (over <= 0) return dx;
+    return (dx < 0 ? -1 : 1) * (slack + over * 0.35);
+  }
+
+  list.addEventListener('touchstart', function (event) {
+    suppressClick = false;
+    gesture = null;
+    if (event.touches.length !== 1) return;
+    var row = event.target.closest('.row');
+    if (!row) return;
+    gesture = {
+      row: row,
+      face: row.querySelector('[data-face]'),
+      x: event.touches[0].clientX,
+      y: event.touches[0].clientY,
+      dx: 0,
+      engaged: false,
+      abandoned: false
+    };
+  }, { passive: true });
+
+  list.addEventListener('touchmove', function (event) {
+    if (!gesture || gesture.abandoned) return;
+    var touch = event.touches[0];
+    var dx = touch.clientX - gesture.x;
+    var dy = touch.clientY - gesture.y;
+    if (!gesture.engaged) {
+      // Scrolling wins ties and wins outright once the finger has travelled
+      // further down the page than across it; otherwise the list would feel
+      // sticky whenever a thumb drifted sideways.
+      if (Math.abs(dy) >= Math.abs(dx) || Math.abs(dy) > ENGAGE) {
+        gesture.abandoned = true;
+        return;
+      }
+      if (Math.abs(dx) <= ENGAGE) return;
+      gesture.engaged = true;
+      gesture.row.classList.add('dragging');
+    }
+    event.preventDefault();
+    gesture.dx = damped(dx);
+    gesture.row.setAttribute('data-reveal', gesture.dx > 0 ? 'read' : 'star');
+    gesture.face.style.transform = 'translate3d(' + gesture.dx + 'px,0,0)';
+  }, { passive: false });
+
+  function settle(commit) {
+    if (!gesture) return;
+    var it = gesture;
+    gesture = null;
+    if (!it.engaged) return;
+    suppressClick = true;
+    it.row.classList.remove('dragging');
+    it.face.style.transform = '';
+    // Kept until the row has slid home, so the colour fades out with it rather
+    // than vanishing the instant the finger lifts.
+    window.setTimeout(function () { it.row.removeAttribute('data-reveal'); }, 260);
+    if (commit && Math.abs(it.dx) >= COMMIT) {
+      run(it.row, it.dx > 0 ? 'read' : 'star');
+    }
+  }
+
+  list.addEventListener('touchend', function () { settle(true); });
+  list.addEventListener('touchcancel', function () { settle(false); });
+})();
+</script>
+{% endblock %}

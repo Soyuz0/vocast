@@ -1,0 +1,50 @@
+{% extends "mobile_base.html" %}
+{% block title %}Vocast{% endblock %}
+
+{% block header %}
+<header class="nav plain">
+  <h1 class="largetitle">Vocast</h1>
+</header>
+{% endblock %}
+
+{% block content %}
+<div class="group">
+  <div class="card">
+    <a class="item" href="{{ destination() }}">
+      <span class="glyph" aria-hidden="true">&#9776;</span>
+      <span class="label">Library</span>
+      <span class="n">{{ library_count }}</span>
+      <span class="disclosure" aria-hidden="true"></span>
+    </a>
+    <a class="item" href="{{ destination(playlist='listen-later') }}">
+      <span class="glyph" aria-hidden="true">&#9733;</span>
+      <span class="label">Listen Later</span>
+      <span class="n">{{ listen_later_count }}</span>
+      <span class="disclosure" aria-hidden="true"></span>
+    </a>
+  </div>
+</div>
+
+<div class="group">
+  <h2 id="publications-heading">Publications</h2>
+  {% if publications %}
+  <div class="card">
+    {% for publication in publications %}
+    <a class="item" href="{{ destination(origin_id=publication.id) }}">
+      <span class="glyph" aria-hidden="true">&#9679;</span>
+      <span class="label">{{ publication.name }}</span>
+      <span class="n">{{ publication.count }}</span>
+      <span class="disclosure" aria-hidden="true"></span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>Nothing here yet</strong>
+    <span>No publications have {{ filter_label|lower }} articles.</span>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block toolbar_status %}{{ library_count }} {{ filter_label|lower }}{% endblock %}

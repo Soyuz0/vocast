@@ -226,8 +226,10 @@ def create_router(state: ServiceState) -> APIRouter:
     _register_health(router, state)
     _register_admin(router, state)
     from .library_web import register_library
+    from .mobile_web import register_mobile
 
     register_library(router, state)
+    register_mobile(router, state)
     return router
 
 

@@ -41,6 +41,7 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         if state is not None:
             lines.append("all sources: /feeds/all.xml")
             lines.append("library: /library")
+            lines.append("library on a phone: /m")
             lines.append("listen later: /feeds/listen-later.xml")
             lines.append("health: /api/health")
         return PlainTextResponse("\n".join(lines) + "\n")
