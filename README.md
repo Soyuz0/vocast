@@ -525,10 +525,12 @@ finished episode, a progress bar while it is being narrated, and nothing at all
 for an article the worker has not reached. Tapping a row opens the original
 article in a new tab.
 
-Swipe a row right to toggle read, left to toggle Listen Later. Both actions are
-also plain buttons — the unread dot on the left, the star on the right — so
-neither needs a gesture, and an Undo appears beside the row after either one.
-The gesture keeps whichever direction it started in, so dragging back cancels
+Swipe a row right to toggle read, left to toggle Listen Later, and an Undo
+appears beside the row after either one. The unread dot on the leading edge is
+also a button, so marking read never needs a gesture. The star on the trailing
+edge is an indicator only and ignores taps — starring is the swipe — though the
+action survives as an off-screen button that a keyboard or screen reader can
+still reach. The gesture keeps whichever direction it started in, so dragging back cancels
 rather than performing the other action, and it will not start within about
 28px of either screen edge, which is left to Safari's own back and forward
 swipes. Rows never disappear on their own: marking one read while the unread

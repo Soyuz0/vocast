@@ -23,7 +23,6 @@ from .api import ServiceState
 from .library_query import LibraryQuery, LibraryQueryService
 from .library_web import require_page_token, templates
 from .models import EntryStatus
-from .timeutils import utcnow
 
 MOBILE_PATH = "/m"
 ARTICLES_PATH = "/m/articles"
@@ -197,7 +196,6 @@ def register_mobile(router: APIRouter, state: ServiceState) -> None:
                 base_path, ARTICLES_PATH, filter=active_filter, **selection
             ),
             search_value=search or "",
-            this_year=utcnow().year,
             page_url=lambda number: _url(
                 base_path,
                 ARTICLES_PATH,

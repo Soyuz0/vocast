@@ -38,9 +38,15 @@
 .mark .pip{width:10px;height:10px;border-radius:50%;background:var(--tint);
   transition:background 160ms ease,box-shadow 160ms ease}
 .row[data-read="true"] .mark .pip{background:transparent;box-shadow:inset 0 0 0 1.5px var(--bg-4)}
-.star{padding-top:12px;font-size:18px;line-height:1;color:var(--bg-4)}
+.star{padding-top:12px;font-size:18px;line-height:1;color:var(--bg-4);
+  pointer-events:none;transition:color 160ms ease}
 .row[data-queued="true"] .star{color:var(--star)}
-.mark:disabled,.star:disabled{cursor:default}
+.mark:disabled{cursor:default}
+/* Off-screen until a keyboard reaches it, then shown where it sits so a
+   sighted keyboard user can see what they are about to activate. */
+.offscreen:focus-visible{position:absolute;top:6px;right:6px;width:auto;height:auto;
+  margin:0;clip:auto;padding:4px 10px;border-radius:8px;background:var(--bg-4);
+  color:var(--text-white);font-size:13px;z-index:2}
 .row[data-busy="true"] .rowface{opacity:.55}
 
 /* Narration length, or how far off it is. Determinate: the fill is chunks done
@@ -68,11 +74,14 @@
 {% endblock %}
 
 {% block navleading %}
-<a class="back" href="{{ back_url }}"><span class="chev" aria-hidden="true"></span>Vocast</a>
+<a class="back" href="{{ back_url }}" aria-label="Back to Vocast">
+  <span class="chev" aria-hidden="true"></span>
+</a>
 {% endblock %}
 
-{% block navtitle %}
-<h1 class="largetitle">{{ title }}</h1>
+{% block navtitle %}{{ title }}{% endblock %}
+
+{% block navbelow %}
 {% if search_value %}<p class="subtitle">Results for &ldquo;{{ search_value }}&rdquo;</p>{% endif %}
 {% endblock %}
 
@@ -100,8 +109,9 @@
             <span class="publication">{{ item.origin_name }}</span>
             {% if item.published_at %}
             <span class="sep" aria-hidden="true">&middot;</span>
-            <span>{{ item.published_at.strftime('%b %d') if item.published_at.year == this_year
-                     else item.published_at.strftime('%b %d, %Y') }}</span>
+            {#- Always the year. The backlog reaches back years, and a bare
+                month and day makes a 2016 article look like this week's. -#}
+            <span>{{ item.published_at.strftime('%b %d, %Y') }}</span>
             {% endif %}
             {#- Length only once there is one. A percentage while it is being
                 narrated, nothing at all for an article nobody has started: an
@@ -123,11 +133,15 @@
             {% endif %}
           </span>
         </a>
-        <button class="star" type="button" data-action="star" disabled
+        {#- The star is an indicator, not a control: starring is a swipe. The
+            button that carries the action is off-screen rather than absent, so
+            a keyboard or screen reader can still reach it — it surfaces on
+            keyboard focus and is unreachable by tapping. -#}
+        <span class="star" aria-hidden="true">&#9733;</span>
+        <button class="sr offscreen" type="button" data-action="star" disabled
                 aria-pressed="{{ 'true' if item.queued else 'false' }}"
-                aria-label="{{ 'Remove from' if item.queued else 'Add to' }} Listen Later: {{ item.title }}">
-          <span aria-hidden="true">&#9733;</span>
-        </button>
+                aria-label="{{ 'Remove from' if item.queued else 'Add to' }} Listen Later: {{ item.title }}">{{
+          'Remove from' if item.queued else 'Add to' }} Listen Later</button>
       </div>
       <p class="msg" data-message role="status"></p>
     </div>

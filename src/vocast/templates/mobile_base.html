@@ -40,24 +40,34 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
-/* ---- navigation bar: translucent, sticky, large title underneath ---- */
+/* ---- navigation bar: one translucent, sticky row ----
+   Back, title, refresh. The title is taken out of the flow and pinned between
+   two equal insets rather than centred in whatever space the side controls
+   leave over; otherwise it would sit dead centre on page one, where the
+   leading slot is empty, and visibly off-centre on page two, where it is not. */
 .nav{position:sticky;top:0;z-index:4;background:var(--chrome);
   -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
   border-bottom:1px solid var(--hairline);padding-top:env(safe-area-inset-top)}
-.nav .bar{display:flex;align-items:center;min-height:44px;padding:0 6px}
-.back{display:inline-flex;align-items:center;gap:2px;min-height:44px;padding:0 10px 0 4px;
-  color:var(--tint);font-size:17px}
+.nav .bar{position:relative;display:flex;align-items:center;min-height:44px;padding:0 4px}
+.nav .slot{display:flex;align-items:center;flex:none;min-width:44px}
+.nav .slot.trailing{margin-left:auto;justify-content:flex-end}
+/* Chevron only. A back label wide enough to read is wide enough to collide
+   with a centred title, and the title already names where you are. */
+.back{display:inline-flex;align-items:center;justify-content:center;
+  width:44px;height:44px;color:var(--tint)}
+.back:active{opacity:.5}
 .back .chev{display:block;width:11px;height:11px;border-left:2.5px solid currentColor;
-  border-bottom:2.5px solid currentColor;transform:rotate(45deg);margin-right:3px}
-.nav .bartitle{font-size:17px;font-weight:600;margin:0 auto;padding:0 8px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.largetitle{margin:0;padding:2px 16px 10px;font-size:34px;line-height:41px;
-  font-weight:700;letter-spacing:-.02em}
-.subtitle{padding:0 16px 12px;margin:-6px 0 0;color:var(--text-grey);font-size:14px}
-/* Pinned to the trailing edge of both pages' bars. A link, not a button, so a
-   tap still reloads the page with JavaScript off; the script upgrades it to
-   pull read state from the reader first. */
-.refresh{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;
+  border-bottom:2.5px solid currentColor;transform:rotate(45deg);margin-left:4px}
+/* pointer-events off because it spans the whole bar and must never swallow a
+   tap meant for the control underneath it. */
+.bartitle{position:absolute;left:52px;right:52px;margin:0;pointer-events:none;
+  font-size:17px;font-weight:600;line-height:1.25;text-align:center;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subtitle{padding:0 16px 12px;margin:6px 0 0;color:var(--text-grey);font-size:14px;
+  text-align:center}
+/* A link, not a button, so a tap still reloads the page with JavaScript off;
+   the script upgrades it to pull read state from the reader first. */
+.refresh{display:inline-flex;align-items:center;justify-content:center;
   width:44px;height:44px;flex:none;color:var(--tint);font-size:21px;line-height:1}
 .refresh:active{opacity:.5}
 .refresh .arrow{display:block}
@@ -139,12 +149,15 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 {% block header %}
 <header class="nav">
   <div class="bar">
-    {% block navleading %}{% endblock %}
-    <a class="refresh" href="{{ self_url }}" data-refresh aria-label="Refresh">
-      <span class="arrow" aria-hidden="true">&#8635;</span>
-    </a>
+    <div class="slot leading">{% block navleading %}{% endblock %}</div>
+    <h1 class="bartitle">{% block navtitle %}{% endblock %}</h1>
+    <div class="slot trailing">
+      <a class="refresh" href="{{ self_url }}" data-refresh aria-label="Refresh">
+        <span class="arrow" aria-hidden="true">&#8635;</span>
+      </a>
+    </div>
   </div>
-  {% block navtitle %}{% endblock %}
+  {% block navbelow %}{% endblock %}
 </header>
 {% endblock %}
 {% block content %}{% endblock %}
@@ -159,7 +172,9 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
       {% endfor %}
     </div>
     <details class="searchpop" data-searchpop {% if search_value %}open{% endif %}>
-      <summary aria-label="Search"><span class="glass" aria-hidden="true"></span></summary>
+      <summary data-searchopen aria-label="Search">
+        <span class="glass" aria-hidden="true"></span>
+      </summary>
       <div class="pop">
         <form method="get" action="{{ search_action }}" role="search">
           {% for name, value in search_hidden.items() %}
@@ -167,7 +182,8 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
           {% endfor %}
           <label class="sr" for="mobile-search">Search articles</label>
           <input id="mobile-search" type="search" name="search" value="{{ search_value }}"
-                 placeholder="Search articles" autocomplete="off" autocapitalize="none">
+                 placeholder="Search articles" enterkeyhint="search"
+                 autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
           <button type="submit">Search</button>
           {% if search_value %}
           <a class="clear" href="{{ search_clear_url }}">Clear</a>
@@ -180,11 +196,35 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 
 <script>
 (function () {
-  // The search panel is a <details>, so it opens without JS. With JS it also
-  // takes the caret, which is what the magnifying glass implies.
+  // The search panel is a <details>, so the magnifying glass opens it with no
+  // script at all. What the script adds is the keyboard.
+  //
+  // iOS Safari only raises the keyboard when focus() runs synchronously inside
+  // a real user-gesture handler. The obvious place -- the details' own toggle
+  // event -- is not one: it is dispatched as a separate task after the open
+  // attribute has already changed, so focusing there put the caret in the
+  // field and left the keyboard down. So the summary's activation is taken
+  // over instead: cancel the default toggle, open the panel by hand, and focus
+  // in the same tick as the tap, with nothing asynchronous in between.
   var pop = document.querySelector('[data-searchpop]');
-  if (pop) pop.addEventListener('toggle', function () {
-    if (pop.open) pop.querySelector('input[type="search"]').focus();
+  var opener = pop && pop.querySelector('[data-searchopen]');
+  if (opener) opener.addEventListener('click', function (event) {
+    var field = pop.querySelector('input[type="search"]');
+    if (pop.open) {
+      // Let the default close it, but drop the keyboard first so the toolbar
+      // does not sit over a shrinking viewport on the way out.
+      field.blur();
+      return;
+    }
+    event.preventDefault();
+    pop.open = true;
+    // Reading layout forces the style update the open attribute just queued,
+    // so the field is rendered -- and therefore focusable -- by the next line.
+    // Still synchronous, so the gesture is intact.
+    void field.offsetWidth;
+    field.focus();
+    // Typing then replaces the previous search rather than appending to it.
+    field.select();
   });
 
   // Refresh means "show me what the reader thinks now". Reloading alone would

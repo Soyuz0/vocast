@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,7 @@ def _add_entry(
     title: str,
     origin: str = "Example Publication",
     url: str = "https://articles.example.com/read?one=1&two=2",
+    published_at: datetime | None = None,
     status: EntryStatus = EntryStatus.PENDING,
     duration_seconds: float | None = None,
     progress: tuple[int, int] | None = None,
@@ -61,7 +63,7 @@ def _add_entry(
             external_guid=f"guid-{title}",
             title=title,
             article_url=url,
-            published_at=utcnow(),
+            published_at=published_at or utcnow(),
             author="Ada Author",
             origin_name=origin,
         )
@@ -96,6 +98,26 @@ def _count_beside(body: str, label: str) -> int:
     )
     assert match, f"no row labelled {label!r}"
     return int(match.group(1))
+
+
+def _bar_title(body: str) -> str:
+    match = re.search(r'<h1 class="bartitle">\s*(.*?)\s*</h1>', body, re.DOTALL)
+    assert match, "no title in the navigation bar"
+    return match.group(1)
+
+
+def _nav_bar(body: str) -> str:
+    return body.split('<header class="nav">', 1)[1].split("</header>", 1)[0]
+
+
+def _leading_slot(body: str) -> str:
+    return body.split('<div class="slot leading">', 1)[1].split("</div>", 1)[0].strip()
+
+
+def _css_rule(body: str, selector: str) -> str:
+    match = re.search(rf"{re.escape(selector)}\{{(.*?)\}}", body, re.DOTALL)
+    assert match, f"no rule for {selector}"
+    return " ".join(match.group(1).split())
 
 
 def _tag(body: str, attribute: str) -> str:
@@ -207,6 +229,55 @@ def test_refresh_is_reachable_from_both_pages_and_reloads_without_javascript(
     assert "/api/read-sync" in body
 
 
+@pytest.mark.parametrize("path", [SOURCES_PAGE, ARTICLES_PAGE])
+def test_the_title_shares_the_bar_with_refresh(
+    client: TestClient, context: AppContext, path: str
+):
+    _add_entry(context, title="An article")
+
+    bar = _nav_bar(client.get(path).text)
+
+    assert '<h1 class="bartitle">' in bar
+    assert "data-refresh" in bar
+
+
+def test_the_title_is_centred_on_the_bar_not_on_the_space_left_over(
+    client: TestClient, context: AppContext
+):
+    """Centring it in the leftover space would put it off centre on page two,
+    which has a back button, and drift as the selected title changed."""
+    _add_entry(context, title="An article")
+
+    rule = _css_rule(client.get(ARTICLES_PAGE).text, ".bartitle")
+
+    assert "position:absolute" in rule
+    assert "left:52px" in rule
+    assert "right:52px" in rule
+
+
+def test_the_leading_slot_is_empty_on_page_one_and_the_way_back_on_page_two(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="An article")
+
+    assert _leading_slot(client.get(SOURCES_PAGE).text) == ""
+    assert 'class="back"' in _leading_slot(client.get(ARTICLES_PAGE).text)
+
+
+def test_a_long_title_truncates_rather_than_moving_the_controls(
+    client: TestClient, context: AppContext
+):
+    publication = "The Exceedingly Long Quarterly Review of Everything At Once"
+    _add_entry(context, title="An article", origin=publication)
+
+    body = client.get(ARTICLES_PAGE, params={"origin_id": publication.casefold()}).text
+    rule = _css_rule(body, ".bartitle")
+
+    assert _bar_title(body) == publication
+    assert "white-space:nowrap" in rule
+    assert "text-overflow:ellipsis" in rule
+
+
 def test_refresh_returns_to_the_page_it_was_pressed_on(
     client: TestClient, context: AppContext
 ):
@@ -288,7 +359,7 @@ def test_a_status_page_narrows_to_that_status(client: TestClient, context: AppCo
 
     assert "Broken" in body
     assert "Narrated" not in body
-    assert '<h1 class="largetitle">Failed</h1>' in body
+    assert _bar_title(body) == "Failed"
 
 
 def test_status_and_the_read_filter_compose(client: TestClient, context: AppContext):
@@ -312,7 +383,7 @@ def test_an_unrecognised_status_falls_back_to_the_whole_library(
     body = client.get(ARTICLES_PAGE, params={"status": "half-baked"}).text
 
     assert "An article" in body
-    assert '<h1 class="largetitle">Library</h1>' in body
+    assert _bar_title(body) == "Library"
 
 
 def test_publications_are_listed_alphabetically(
@@ -482,6 +553,19 @@ def _meta_of(body: str, title: str) -> str:
     return after[1].split("</a>", 1)[0]
 
 
+def test_dates_carry_the_year(client: TestClient, context: AppContext):
+    """The backlog reaches back years; a bare month and day makes a 2016
+    article look like this week's."""
+    old = datetime(2016, 3, 7, 12, 0, tzinfo=timezone.utc)
+    _add_entry(context, title="From the archive", published_at=old)
+    _add_entry(context, title="From today")
+
+    body = client.get(ARTICLES_PAGE).text
+
+    assert "Mar 07, 2016" in _meta_of(body, "From the archive")
+    assert utcnow().strftime("%b %d, %Y") in _meta_of(body, "From today")
+
+
 def test_a_narrated_article_shows_how_long_it_runs(
     client: TestClient, context: AppContext
 ):
@@ -568,6 +652,40 @@ def test_search_narrows_the_article_list(client: TestClient, context: AppContext
     assert "Rain again" not in body
 
 
+@pytest.mark.parametrize("path", [SOURCES_PAGE, ARTICLES_PAGE])
+def test_search_opens_without_javascript(
+    client: TestClient, context: AppContext, path: str
+):
+    """A native <details>, so the magnifying glass works with the script off."""
+    _add_entry(context, title="An article")
+
+    body = client.get(path).text
+
+    assert '<details class="searchpop"' in body
+    assert "<summary data-searchopen" in body
+    assert '<form method="get"' in body
+
+
+@pytest.mark.parametrize("path", [SOURCES_PAGE, ARTICLES_PAGE])
+def test_opening_search_focuses_the_field_inside_the_tap(
+    client: TestClient, context: AppContext, path: str
+):
+    """iOS raises the keyboard only for a focus() that runs synchronously in a
+    real gesture handler. The details' own toggle event is dispatched later, so
+    focusing there left the keyboard down."""
+    _add_entry(context, title="An article")
+
+    body = client.get(path).text
+    script = body.split("<script>", 1)[1].split("</script>", 1)[0]
+
+    assert "addEventListener('click'" in script
+    assert "addEventListener('toggle'" not in script
+    assert "event.preventDefault();" in script
+    assert "pop.open = true;" in script
+    assert "field.focus();" in script
+    assert "field.select();" in script
+
+
 def test_search_stays_within_the_chosen_publication(
     client: TestClient, context: AppContext
 ):
@@ -583,23 +701,49 @@ def test_search_stays_within_the_chosen_publication(
     assert 'name="origin_id" value="daily news"' in body
 
 
-def test_both_swipe_actions_have_a_button_a_thumb_can_find(
+def test_the_read_pip_stays_a_button_a_thumb_can_find(
     client: TestClient, context: AppContext
 ):
-    """Swiping is the fast path, not the only one, and not usable by a reader."""
+    """Swiping is the fast path for read, not the only one."""
     _add_entry(context, title="Saved and read", read=True, queued=True)
 
-    body = client.get(ARTICLES_PAGE, params={"filter": "all"}).text
-
-    read_button = _tag(body, 'data-action="read"')
-    star_button = _tag(body, 'data-action="star"')
+    read_button = _tag(
+        client.get(ARTICLES_PAGE, params={"filter": "all"}).text, 'data-action="read"'
+    )
 
     assert read_button.startswith("<button")
     assert 'aria-pressed="true"' in read_button
     assert "Mark as unread: Saved and read" in read_button
+
+
+def test_the_star_is_an_indicator_that_no_tap_reaches(
+    client: TestClient, context: AppContext
+):
+    """Starring is swipe-only by request, so the visible star must not invite
+    a tap that would do nothing."""
+    _add_entry(context, title="Saved", queued=True)
+
+    body = client.get(ARTICLES_PAGE).text
+    star = _tag(body, 'class="star"')
+
+    assert star.startswith("<span")
+    assert 'aria-hidden="true"' in star
+    assert '<button class="star"' not in body
+
+
+def test_starring_stays_reachable_off_screen_for_assistive_technology(
+    client: TestClient, context: AppContext
+):
+    """Untappable is not the same as unreachable: the action survives as an
+    off-screen button a keyboard or screen reader can still get to."""
+    _add_entry(context, title="Saved", queued=True)
+
+    star_button = _tag(client.get(ARTICLES_PAGE).text, 'data-action="star"')
+
     assert star_button.startswith("<button")
+    assert "sr" in star_button
     assert 'aria-pressed="true"' in star_button
-    assert "Remove from Listen Later: Saved and read" in star_button
+    assert "Remove from Listen Later: Saved" in star_button
 
 
 def test_the_row_swipe_cedes_the_screen_edges_to_the_browser(
