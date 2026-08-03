@@ -61,9 +61,12 @@ class FeedEntry:
     #: post is discussing. Shown as the episode's link, because that is the
     #: piece that was narrated; article_url stays the fetch target.
     post_url: str | None = None
-    #: The post's own text, set when it should be narrated in preference to
-    #: fetching article_url. See _SCHEMA_V7.
+    #: The body the feed carried, when substantial enough to narrate. Kept even
+    #: when article_url is the better source, so that a failed fetch has
+    #: something to fall back on.
     feed_content: str | None = None
+    #: Whether feed_content should be narrated instead of fetching article_url.
+    prefer_feed_content: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,9 @@ class Entry:
     read_at: datetime | None
     marked_read_at: datetime | None
     feed_content: str | None
+    #: Whether that body should be narrated in preference to fetching, which is
+    #: the case for a link post. See _SCHEMA_V7 and _SCHEMA_V12.
+    prefer_feed_content: bool
     post_url: str | None
     progress_done: int | None
     progress_total: int | None
@@ -145,6 +151,7 @@ class Entry:
             read_at=from_iso(row["read_at"]),
             marked_read_at=from_iso(row["marked_read_at"]),
             feed_content=row["feed_content"],
+            prefer_feed_content=bool(row["prefer_feed_content"]),
             post_url=row["post_url"],
             progress_done=row["progress_done"],
             progress_total=row["progress_total"],

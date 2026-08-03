@@ -143,9 +143,7 @@ def _queued_ready_entry(db, repositories):
 
 def _mark_downloaded(db, entry_id: int, when: str) -> None:
     with db.transaction() as conn:
-        conn.execute(
-            "UPDATE entries SET read_at = ? WHERE id = ?", (when, entry_id)
-        )
+        conn.execute("UPDATE entries SET read_at = ? WHERE id = ?", (when, entry_id))
 
 
 def test_downloaded_episode_retires_from_the_playlist_feed_too(db, repositories):

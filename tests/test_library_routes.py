@@ -716,7 +716,9 @@ def test_the_mobile_row_carries_the_date_and_length(
     _add_entry(context)
     body = client.get("/library").text
 
-    mobile_group = body.split('class="mobstatus"')[1].split("</span>\n            <span")[0]
+    mobile_group = body.split('class="mobstatus"')[1].split(
+        "</span>\n            <span"
+    )[0]
     assert utcnow().strftime("%b %d, %Y") in mobile_group
 
 

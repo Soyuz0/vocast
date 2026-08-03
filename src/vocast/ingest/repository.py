@@ -26,8 +26,8 @@ _ENTRY_COLUMNS = """
     id, source_id, external_guid, article_url, title, author, published_at,
     origin_name, origin_image_url, status, vocast_episode_id, content_hash,
     duration_seconds, audio_bytes, read_at, marked_read_at, feed_content,
-    post_url, progress_done, progress_total, retry_count, next_retry_at,
-    claimed_at, error_message, created_at, updated_at
+    prefer_feed_content, post_url, progress_done, progress_total, retry_count,
+    next_retry_at, claimed_at, error_message, created_at, updated_at
 """
 
 
@@ -309,8 +309,9 @@ class EntryRepository:
                 INSERT INTO entries (
                     source_id, external_guid, article_url, title, author,
                     published_at, origin_name, origin_image_url, feed_content,
-                    post_url, status, retry_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    prefer_feed_content, post_url, status, retry_count,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(source_id, external_guid) DO NOTHING
                 """,
                 (
@@ -323,6 +324,7 @@ class EntryRepository:
                     entry.origin_name,
                     entry.origin_image_url,
                     entry.feed_content,
+                    1 if entry.prefer_feed_content else 0,
                     entry.post_url,
                     EntryStatus.PENDING.value,
                     now,

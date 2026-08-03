@@ -360,7 +360,7 @@ class FreshRSSAPIAdapter:
         guid = item.get("id")
         if not isinstance(guid, str) or not guid:
             return None
-        own_text = self._own_text(item, article_url)
+        feed_body, prefer_body = self._feed_body(item, article_url)
         return FeedEntry(
             source_id=self._source.id,
             external_guid=guid,
@@ -371,40 +371,49 @@ class FreshRSSAPIAdapter:
             summary=_summary(item),
             origin_name=_origin_name(item),
             origin_image_url=self._icon_for(item),
-            feed_content=own_text,
+            feed_content=feed_body,
+            prefer_feed_content=prefer_body,
             post_url=(
-                corrected_url(self._post_url(item, article_url)) if own_text else None
+                corrected_url(self._post_url(item, article_url))
+                if prefer_body
+                else None
             ),
         )
 
-    def _own_text(self, item: dict[str, Any], article_url: str) -> str | None:
-        """The post's text, when the link points away from the publication.
+    def _feed_body(
+        self, item: dict[str, Any], article_url: str
+    ) -> tuple[str | None, bool]:
+        """The body the feed carried, and whether to narrate it rather than fetch.
 
-        Link-blog posts link outward to whatever is being discussed, so
-        following the link narrates someone else's article rather than the post
-        itself -- and fails outright when that target is paywalled. When the
-        link leaves the feed's own site and the entry carries a substantial body
-        of its own, that body is the article.
+        The body is kept whenever it is substantial enough to narrate, even when
+        fetching the link is the better source, because a fetch can fail for
+        reasons that have nothing to do with the article: the page moved, a
+        bridge expired it, a paywall appeared. Holding the copy the feed already
+        gave us means such an article is recoverable rather than lost.
 
-        Also catches publications served from two domains (a custom domain with
-        the platform's own URL in the link). Those are not link posts, but their
-        feed carries the full text, so preferring it is still correct.
+        It is *preferred* only when the link points away from the publication.
+        That is a link-blog post, where following the link narrates someone
+        else's article rather than the post. The same test catches a publication
+        served from two domains, whose feed carries its full text anyway.
+
+        With no site to compare against, the link cannot be shown to lead
+        elsewhere, so the body is kept but not preferred: assuming otherwise
+        would narrate an excerpt in place of the full article.
         """
         config = self._source.config or {}
+        body = _body_html(item)
+        minimum = int(config.get("min_own_text_chars", 400))
+        if not body or len(_visible_length(body)) < minimum:
+            return None, False
         if not config.get("prefer_own_text", True):
-            return None
+            return body, False
         site = self._feed_sites.get(
             (item.get("origin") or {}).get("streamId", "")
             if isinstance(item.get("origin"), dict)
             else ""
         )
-        if not site or _same_site(site, article_url):
-            return None
-        body = _body_html(item)
-        if not body:
-            return None
-        minimum = int(config.get("min_own_text_chars", 400))
-        return body if len(_visible_length(body)) >= minimum else None
+        leads_elsewhere = bool(site) and not _same_site(site, article_url)
+        return body, leads_elsewhere
 
     def _post_url(self, item: dict[str, Any], article_url: str) -> str | None:
         """A link post's own page, when the body advertises one.

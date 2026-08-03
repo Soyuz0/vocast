@@ -651,7 +651,7 @@ def test_small_range_probe_is_not_a_download(
 def test_a_suffix_range_probe_is_not_a_download(
     client: TestClient, context: AppContext, downloadable
 ):
-    """"bytes=-1024" asks for the last kilobyte, which is how a client reads
+    """ "bytes=-1024" asks for the last kilobyte, which is how a client reads
     trailing tags. It was treated as a full download because the first offset is
     empty, marking the article read -- and read upstream -- without it being
     fetched."""
@@ -663,7 +663,7 @@ def test_a_suffix_range_probe_is_not_a_download(
 def test_an_open_ended_range_is_a_download(
     client: TestClient, context: AppContext, downloadable
 ):
-    """"bytes=0-" is the whole file, not a probe."""
+    """ "bytes=0-" is the whole file, not a probe."""
     client.get("/audio/20260604T120000Z_a_aaa1.mp3", headers={"Range": "bytes=0-"})
 
     assert context.entries.get(downloadable).read_at is not None

@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _SCHEMA_V1 = """
 CREATE TABLE sources (
@@ -172,6 +172,16 @@ _SCHEMA_V11 = """
 ALTER TABLE entries RENAME COLUMN downloaded_at TO read_at;
 """
 
+# feed_content used to mean two things at once: "here is the body" and "narrate
+# this instead of fetching". Splitting them lets the body be kept as a fallback
+# for when fetching fails, without changing what gets narrated normally. Existing
+# rows had a body only when it was preferred, so they all become preferred.
+_SCHEMA_V12 = """
+ALTER TABLE entries ADD COLUMN prefer_feed_content INTEGER NOT NULL DEFAULT 0;
+UPDATE entries SET prefer_feed_content = 1
+ WHERE feed_content IS NOT NULL AND feed_content != '';
+"""
+
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
@@ -184,6 +194,7 @@ _MIGRATIONS: list[tuple[int, str]] = [
     (9, _SCHEMA_V9),
     (10, _SCHEMA_V10),
     (11, _SCHEMA_V11),
+    (12, _SCHEMA_V12),
 ]
 
 

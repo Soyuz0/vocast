@@ -155,9 +155,9 @@ def test_status_queue_and_read_filters(library_data):
         "Alpha systems",
         "Gamma notes",
     }
-    assert [
-        item.title for item in service.search(LibraryQuery(read=True)).items
-    ] == ["Beta release"]
+    assert [item.title for item in service.search(LibraryQuery(read=True)).items] == [
+        "Beta release"
+    ]
     assert [
         item.title
         for item in service.search(LibraryQuery(status=EntryStatus.FAILED)).items

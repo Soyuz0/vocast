@@ -175,9 +175,7 @@ def test_a_token_in_the_url_becomes_a_cookie_so_navigation_keeps_working(
     _add_entry(context, title="An article")
     _with_token(context)
 
-    landing = client.get(
-        f"{SOURCES_PAGE}?token=feed-secret", follow_redirects=False
-    )
+    landing = client.get(f"{SOURCES_PAGE}?token=feed-secret", follow_redirects=False)
 
     assert landing.status_code == 303
     assert landing.headers["location"] == SOURCES_PAGE

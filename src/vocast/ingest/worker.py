@@ -119,6 +119,7 @@ class Worker:
                 cover_url=entry.origin_image_url,
                 replace_episode_id=entry.vocast_episode_id,
                 content_html=entry.feed_content,
+                prefer_content_html=entry.prefer_feed_content,
                 on_progress=functools.partial(self._record_progress, entry.id),
             )
         except GenerationCancelled as exc:

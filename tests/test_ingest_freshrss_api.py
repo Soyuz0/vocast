@@ -491,50 +491,64 @@ def test_outbound_link_narrates_the_post_not_the_target():
 
 
 def test_link_to_the_publications_own_site_is_fetched_normally():
+    """The page is the article, so it is fetched. The body is still kept, as
+    something to fall back on if that fetch ever fails."""
     api = FakeAPIWithSites(
         [{"items": [_linked_item("https://daringfireball.net/2025/05/post")]}]
     )
     [entry] = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()
-    assert entry.feed_content is None
+
+    assert entry.prefer_feed_content is False
+    assert entry.feed_content is not None
 
 
 def test_www_prefix_does_not_count_as_a_different_site():
     api = FakeAPIWithSites(
         [{"items": [_linked_item("https://www.daringfireball.net/2025/05/post")]}]
     )
-    assert (
-        FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0].feed_content
-        is None
-    )
+
+    entry = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0]
+
+    assert entry.prefer_feed_content is False
 
 
 def test_outbound_link_with_only_a_stub_body_is_still_fetched():
-    """A teaser is not the article; the link is."""
+    """A teaser is not the article; the link is. Nor is it worth keeping as a
+    fallback, since narrating it would be worse than failing."""
     api = FakeAPIWithSites(
         [{"items": [_linked_item("https://elsewhere.example/x", "<p>Short.</p>")]}]
     )
-    assert (
-        FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0].feed_content
-        is None
-    )
+
+    entry = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0]
+
+    assert entry.feed_content is None
+    assert entry.prefer_feed_content is False
 
 
 def test_behaviour_can_be_turned_off():
+    """prefer_own_text stops the body being narrated in place of the link. The
+    body is still kept: the setting is about preference, not about discarding a
+    copy that may be the only one left."""
     api = FakeAPIWithSites([{"items": [_linked_item("https://elsewhere.example/x")]}])
     source = _source(prefer_own_text=False)
-    assert (
-        FreshRSSAPIAdapter(source, fetcher=api).fetch_entries()[0].feed_content is None
-    )
+
+    entry = FreshRSSAPIAdapter(source, fetcher=api).fetch_entries()[0]
+
+    assert entry.prefer_feed_content is False
 
 
 def test_unknown_feed_site_falls_back_to_fetching_the_link():
+    """With no site to compare against, the link cannot be shown to lead
+    elsewhere, so it is fetched rather than assumed to be a link post. The body
+    is kept, which is what rescues a bridge whose permalink has expired."""
     item = _linked_item("https://elsewhere.example/x")
     item["origin"] = {"streamId": "feed/999", "title": "Unlisted"}
     api = FakeAPIWithSites([{"items": [item]}])
-    assert (
-        FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0].feed_content
-        is None
-    )
+
+    entry = FreshRSSAPIAdapter(_source(), fetcher=api).fetch_entries()[0]
+
+    assert entry.prefer_feed_content is False
+    assert entry.feed_content is not None
 
 
 PERMALINK_BODY = BODY + (

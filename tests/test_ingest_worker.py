@@ -55,6 +55,7 @@ class StubGenerator:
         self.covers: list[str | None] = []
         self.replaced: list[str | None] = []
         self.bodies: list[str | None] = []
+        self.preferred: list[bool] = []
 
     def generate_from_url(
         self,
@@ -65,6 +66,7 @@ class StubGenerator:
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
         content_html: str | None = None,
+        prefer_content_html: bool = False,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> GeneratedEpisode:
         self.calls.append((url, title))
@@ -72,6 +74,7 @@ class StubGenerator:
         self.covers.append(cover_url)
         self.replaced.append(replace_episode_id)
         self.bodies.append(content_html)
+        self.preferred.append(prefer_content_html)
         if on_progress is not None:
             for done in range(1, self.chunks + 1):
                 on_progress(done, self.chunks)

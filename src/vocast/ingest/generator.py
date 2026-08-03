@@ -129,6 +129,7 @@ class EpisodeGenerator(Protocol):
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
         content_html: str | None = None,
+        prefer_content_html: bool = False,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> GeneratedEpisode: ...
 
@@ -170,15 +171,18 @@ class VocastEpisodeGenerator:
         cover_url: str | None = None,
         replace_episode_id: str | None = None,
         content_html: str | None = None,
+        prefer_content_html: bool = False,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> GeneratedEpisode:
-        if content_html:
+        if content_html and prefer_content_html:
             # The post's own text, supplied because its link points elsewhere.
             extracted_title, text, article_cover, quotes = self._from_html(
                 content_html, url
             )
         else:
-            extracted_title, text, article_cover, quotes = self._extract(url)
+            extracted_title, text, article_cover, quotes = self._extract_or_fall_back(
+                url, content_html
+            )
         # A supplied cover is the publication's own artwork, which keeps every
         # episode from a source visually consistent; the article's own image is
         # only a fallback.
@@ -280,6 +284,33 @@ class VocastEpisodeGenerator:
             for passage in split_quoted(body, quotes)
         )
         return passages or [(whole, voice)]
+
+    def _extract_or_fall_back(
+        self, url: str, content_html: str | None
+    ) -> tuple[str | None, str, str | None, list[str]]:
+        """Fetch the article, or narrate the feed's copy if fetching fails.
+
+        A fetch fails for reasons that say nothing about whether the article is
+        worth hearing: the page moved, a newsletter bridge expired its permalink,
+        a paywall went up. When the feed already handed us a substantial body,
+        losing the article to any of those is a choice, not a necessity.
+
+        The fetch is still tried first, because a feed body is often an excerpt
+        while the page is the whole piece. The fallback only runs when there is
+        nothing better to be had.
+        """
+        try:
+            return self._extract(url)
+        except (TransientGenerationError, PermanentGenerationError) as exc:
+            # Deliberately not GenerationError: cancellation is also one of those,
+            # and a paused worker must stop rather than quietly take a shortcut.
+            if not content_html:
+                raise
+            log.info(
+                "fetch failed, narrating the body the feed carried %s",
+                kv(url=url, error=exc),
+            )
+            return self._from_html(content_html, url)
 
     def _extract(self, url: str) -> tuple[str | None, str, str | None, list[str]]:
         try:

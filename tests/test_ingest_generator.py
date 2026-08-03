@@ -16,6 +16,7 @@ from vocast.engines import AudioChunk
 from vocast.ingest import generator as generator_module
 from vocast.ingest.generator import (
     MIN_ARTICLE_CHARS,
+    GenerationCancelled,
     PermanentGenerationError,
     TransientGenerationError,
     VocastEpisodeGenerator,
@@ -583,7 +584,10 @@ def test_post_body_is_narrated_without_fetching_the_link(
     body = "<p>" + ("The author's own commentary here. " * 20) + "</p>"
 
     episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
-        "https://elsewhere.example/x", title="A Link Post", content_html=body
+        "https://elsewhere.example/x",
+        title="A Link Post",
+        content_html=body,
+        prefer_content_html=True,
     )
 
     assert episode.episode_id
@@ -686,9 +690,7 @@ def test_the_narrated_text_is_unchanged_by_quote_splitting(lib: Path):
 
 
 def _article_text(episode) -> str:
-    return (Path(episode.audio_path).parent / "article.txt").read_text(
-        encoding="utf-8"
-    )
+    return (Path(episode.audio_path).parent / "article.txt").read_text(encoding="utf-8")
 
 
 DUPLICATE_HEADLINE_HTML = (
@@ -751,3 +753,80 @@ def test_quote_voicing_survives_the_headline_dedup(lib: Path):
     )
 
     assert "am_michael" in engine.voices
+
+
+# --- falling back to the feed's copy ----------------------------------------
+
+
+FEED_BODY = "<p>" + ("The newsletter's own text, in full. " * 20) + "</p>"
+
+
+def test_a_failed_fetch_narrates_the_body_the_feed_carried(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """A bridge expiring its permalink says nothing about whether the article is
+    worth hearing, and the feed already handed us the text."""
+    _stub_extraction_raising(monkeypatch, FetchError("HTTP 404 Not Found from x"))
+
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://kill-the-newsletter.com/entries/gone.html", content_html=FEED_BODY
+    )
+
+    assert (
+        "newsletter's own text" in library.get_entry(episode.episode_id).article_text()
+    )
+
+
+def test_a_paywalled_page_falls_back_to_the_feed_copy(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """The same applies to a permanent failure: a stub page is not a reason to
+    discard a full article we already hold."""
+    _stub_extraction(monkeypatch, text="Subscribe to continue reading.")
+
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://example.com/paywalled", content_html=FEED_BODY
+    )
+
+    assert (
+        "newsletter's own text" in library.get_entry(episode.episode_id).article_text()
+    )
+
+
+def test_the_page_is_still_preferred_when_it_can_be_fetched(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """A feed body is often an excerpt while the page is the whole piece, so the
+    fallback must not become the default."""
+    _stub_extraction(monkeypatch, text=ARTICLE_TEXT)
+
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://example.com/a", content_html=FEED_BODY
+    )
+
+    text = library.get_entry(episode.episode_id).article_text()
+    assert "newsletter's own text" not in text
+
+
+def test_a_failed_fetch_with_no_feed_copy_still_fails(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """Nothing to fall back on, so the failure stands and is reported as before."""
+    _stub_extraction_raising(monkeypatch, FetchError("HTTP 404 Not Found from x"))
+
+    with pytest.raises(PermanentGenerationError):
+        VocastEpisodeGenerator(engine=engine).generate_from_url(
+            "https://example.com/gone"
+        )
+
+
+def test_cancellation_is_not_mistaken_for_a_failed_fetch(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """A paused worker must stop, not quietly narrate the feed copy instead."""
+    _stub_extraction_raising(monkeypatch, GenerationCancelled("worker paused"))
+
+    with pytest.raises(GenerationCancelled):
+        VocastEpisodeGenerator(engine=engine).generate_from_url(
+            "https://example.com/a", content_html=FEED_BODY
+        )
