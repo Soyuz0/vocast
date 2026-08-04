@@ -830,3 +830,84 @@ def test_cancellation_is_not_mistaken_for_a_failed_fetch(
         VocastEpisodeGenerator(engine=engine).generate_from_url(
             "https://example.com/a", content_html=FEED_BODY
         )
+
+
+# --- pages that render in the browser ---------------------------------------
+
+
+JS_SHELL = (
+    "x\nThis website requires javascript to properly function. Consider "
+    "activating javascript to get access to all site functionality.\n"
+    "LESSWRONG\nLW\nLogin\nA Post Title \u2014 LessWrong\nAI\nFrontpage\n98\n"
+)
+
+
+def test_a_javascript_notice_is_not_an_article(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression: the notice comes with the nav and title, so it clears the
+    length minimum and was narrated as though it were the post."""
+    _stub_extraction(monkeypatch, text=JS_SHELL)
+
+    with pytest.raises(PermanentGenerationError, match="JavaScript"):
+        VocastEpisodeGenerator(engine=engine).generate_from_url(
+            "https://www.lesswrong.com/posts/x/y"
+        )
+
+
+def test_a_javascript_notice_falls_back_to_the_feed_copy(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_extraction(monkeypatch, text=JS_SHELL)
+
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://www.lesswrong.com/posts/x/y", content_html=FEED_BODY
+    )
+
+    assert "newsletter's own text" in library.get_entry(
+        episode.episode_id
+    ).article_text()
+
+
+def test_an_article_discussing_javascript_is_still_narrated(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """The phrase alone proves nothing; it has to open a suspiciously short text."""
+    about_js = "Sites that require javascript are the subject here. " * 60
+    _stub_extraction(monkeypatch, text=about_js)
+
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://example.com/about-js"
+    )
+
+    assert "subject here" in library.get_entry(episode.episode_id).article_text()
+
+
+def test_the_feed_wins_when_the_page_yields_far_less(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """A page can return its chrome and nothing else while still looking like a
+    success, which no failure path would catch."""
+    _stub_extraction(monkeypatch, text="Cookie notice. Accept all. Manage choices.")
+
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://example.com/a", content_html=FEED_BODY
+    )
+
+    assert "newsletter's own text" in library.get_entry(
+        episode.episode_id
+    ).article_text()
+
+
+def test_a_full_page_is_not_displaced_by_a_similar_feed_body(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+):
+    """The page is normally the better source, so the comparison must not be a
+    close-run thing."""
+    _stub_extraction(monkeypatch, text=ARTICLE_TEXT)
+
+    episode = VocastEpisodeGenerator(engine=engine).generate_from_url(
+        "https://example.com/a", content_html="<p>" + ARTICLE_TEXT + "</p>"
+    )
+
+    assert "Sentence one." in library.get_entry(episode.episode_id).article_text()

@@ -9,6 +9,7 @@ manual `vocast add` path and the automated path always produce identical audio.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
@@ -51,6 +52,31 @@ def narration_parts(title: str, byline: str | None, body: str) -> tuple[str, str
     if byline:
         intro.append(_as_sentence(f"by {byline}"))
     return "\n\n".join(intro), body.strip()
+
+
+#: Sites that render in the browser serve a notice like this instead of the
+#: article. The text clears the length minimum easily -- it comes with the nav
+#: and the title -- so length alone does not catch it.
+_JAVASCRIPT_NOTICE = re.compile(
+    r"requires javascript|enable javascript|javascript is (?:disabled|required)",
+    re.IGNORECASE,
+)
+
+
+def rejects_without_javascript(text: str) -> bool:
+    """Whether this is a site's no-JavaScript notice rather than an article.
+
+    The phrase alone proves nothing: an article may well discuss JavaScript. It
+    counts only when it opens the text and the text is far too short to be the
+    article it is claiming to be, which is what a rendering shell looks like.
+    """
+    return bool(_JAVASCRIPT_NOTICE.search(text[:300])) and len(text) < 2000
+
+
+#: How much more text the feed must hold before it is believed over the page. A
+#: page is normally the better source, so this is not a close-run comparison: it
+#: is for when the page plainly did not yield the article at all.
+FEED_BODY_ADVANTAGE = 2.0
 
 
 def build_narration(title: str, byline: str | None, body: str) -> str:
@@ -300,7 +326,7 @@ class VocastEpisodeGenerator:
         nothing better to be had.
         """
         try:
-            return self._extract(url)
+            fetched = self._extract(url)
         except (TransientGenerationError, PermanentGenerationError) as exc:
             # Deliberately not GenerationError: cancellation is also one of those,
             # and a paused worker must stop rather than quietly take a shortcut.
@@ -311,6 +337,21 @@ class VocastEpisodeGenerator:
                 kv(url=url, error=exc),
             )
             return self._from_html(content_html, url)
+
+        if not content_html:
+            return fetched
+        # The page was readable, but a page that renders in the browser can
+        # yield its chrome and nothing else while still looking like a success.
+        # When the feed is holding several times more text, the page did not
+        # give us the article.
+        from_feed = self._from_html(content_html, url)
+        if len(from_feed[1]) > len(fetched[1]) * FEED_BODY_ADVANTAGE:
+            log.info(
+                "page yielded far less than the feed, narrating the feed's copy %s",
+                kv(url=url, page_chars=len(fetched[1]), feed_chars=len(from_feed[1])),
+            )
+            return from_feed
+        return fetched
 
     def _extract(self, url: str) -> tuple[str | None, str, str | None, list[str]]:
         try:
@@ -326,6 +367,11 @@ class VocastEpisodeGenerator:
             raise PermanentGenerationError(f"could not extract {url}: {exc}") from exc
 
         cleaned = text.strip()
+        if rejects_without_javascript(cleaned):
+            raise PermanentGenerationError(
+                f"{url} served a page asking for JavaScript rather than the "
+                f"article; only {len(cleaned)} characters were readable"
+            )
         if len(cleaned) < self._min_chars:
             raise PermanentGenerationError(
                 f"extracted only {len(cleaned)} characters from {url}, below the "
