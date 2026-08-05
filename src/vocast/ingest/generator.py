@@ -12,6 +12,7 @@ import hashlib
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, TypedDict
 
 import trafilatura
@@ -21,10 +22,15 @@ from ..engines import AudioChunk, TTSEngine, get_engine
 from ..fetch import fetch_article_parts
 from ..pipeline import SynthesisCancelled, synthesize_passages
 from ..quotes import quotes_from_xml, split_quoted
+from ..staging import discard_staged_chunks
 from .logs import get_logger, kv
 from .nethttp import BlockedURLError, FetchError, FetchPolicy, fetch
 
 log = get_logger("generator")
+
+#: A resume key that matches this is safe to use as a directory name as it
+#: stands: it cannot escape the staging root or name the root itself.
+_PLAIN_FILENAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 #: Below this many characters the "article" is almost always a paywall notice,
 #: a consent interstitial, or a navigation-only shell. Narrating it produces a
@@ -157,6 +163,7 @@ class EpisodeGenerator(Protocol):
         content_html: str | None = None,
         prefer_content_html: bool = False,
         on_progress: Callable[[int, int], None] | None = None,
+        resume_key: str | None = None,
     ) -> GeneratedEpisode: ...
 
 
@@ -178,6 +185,7 @@ class VocastEpisodeGenerator:
         mp3_bitrate: str = "96k",
         should_continue: Callable[[], bool] | None = None,
         quote_voice: str | None = None,
+        staging_root: Path | None = None,
     ) -> None:
         self._engine_name = engine_name
         self._voice = voice
@@ -187,6 +195,7 @@ class VocastEpisodeGenerator:
         self._mp3_bitrate = mp3_bitrate
         self._should_continue = should_continue
         self._quote_voice = quote_voice
+        self._staging_root = staging_root
 
     def generate_from_url(
         self,
@@ -199,7 +208,15 @@ class VocastEpisodeGenerator:
         content_html: str | None = None,
         prefer_content_html: bool = False,
         on_progress: Callable[[int, int], None] | None = None,
+        resume_key: str | None = None,
     ) -> GeneratedEpisode:
+        """Turn one URL into an episode in the library.
+
+        resume_key names the work item across restarts, so a narration killed
+        part-way can pick up the chunks it had already produced. Callers that
+        pass nothing get no checkpointing, which is right for a one-off: there is
+        nothing to resume into.
+        """
         if content_html and prefer_content_html:
             # The post's own text, supplied because its link points elsewhere.
             extracted_title, text, article_cover, quotes = self._from_html(
@@ -221,6 +238,7 @@ class VocastEpisodeGenerator:
         narration = f"{heading}\n\n{spoken_body}"
         passages = self._passages(heading, spoken_body, quotes, voice)
 
+        staging_dir = self._staging_dir(resume_key)
         try:
             chunk = synthesize_passages(
                 passages,
@@ -228,12 +246,17 @@ class VocastEpisodeGenerator:
                 progress=False,
                 should_continue=self._should_continue,
                 on_progress=on_progress,
+                staging_dir=staging_dir,
             )
         except SynthesisCancelled as exc:
+            # Staged chunks are deliberately left in place: a cancellation is a
+            # pause or a shutdown, and the entry goes back on the queue, so the
+            # next attempt should carry on rather than re-narrate hours of audio.
             raise GenerationCancelled(f"narration of {url} stopped: {exc}") from exc
         except ValueError as exc:
             # Raised for empty input, which the length check above should have
             # already caught; treat it as unusable content rather than retrying.
+            self._discard_staging(staging_dir)
             raise PermanentGenerationError(f"synthesis rejected {url}: {exc}") from exc
         except Exception as exc:
             raise TransientGenerationError(
@@ -266,6 +289,9 @@ class VocastEpisodeGenerator:
                 entry = library.add_entry(**shared)
         else:
             entry = library.add_entry(**shared)
+        # Only now the episode exists: had the write failed, or the process died
+        # during it, the chunks would still have been worth keeping.
+        self._discard_staging(staging_dir)
         log.info(
             "episode generated %s",
             kv(
@@ -285,6 +311,28 @@ class VocastEpisodeGenerator:
         )
 
     # -- internals ---------------------------------------------------------
+
+    def _staging_dir(self, resume_key: str | None) -> Path | None:
+        """Where this article's chunks are checkpointed, if anywhere.
+
+        One directory per work item, so two articles narrated at the same time
+        can never see each other's chunks. A key that is not already a plain
+        filename becomes a hash of itself: the directory is deleted wholesale
+        when the episode is done, which is no place to discover that a key
+        contained a slash or a `..`.
+        """
+        if self._staging_root is None or not resume_key:
+            return None
+        name = (
+            resume_key
+            if _PLAIN_FILENAME.match(resume_key)
+            else f"key-{_hash_text(resume_key)[:16]}"
+        )
+        return Path(self._staging_root) / name
+
+    def _discard_staging(self, staging_dir: Path | None) -> None:
+        if staging_dir is not None:
+            discard_staged_chunks(staging_dir)
 
     def _passages(
         self, heading: str, body: str, quotes: list[str], voice: str

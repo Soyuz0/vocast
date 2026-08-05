@@ -35,6 +35,13 @@ database:
 
 storage:
   library_path: /data/library
+  # Scratch space for chunks of articles still being narrated, so a restart
+  # resumes a long article instead of starting it over. Defaults to a `staging`
+  # directory beside the database, which is deliberate when the library is a
+  # network share: staging is roughly a gigabyte per long article, written a
+  # chunk at a time, and wants local disk. Must be writable, or the service
+  # refuses to start rather than narrate with nowhere to checkpoint.
+  staging_path: /data/staging
 
 polling:
   # Default for sources that do not set poll_interval_minutes.
@@ -52,6 +59,11 @@ worker:
   # Exponential backoff between attempts: 5, 10, 20, 40... capped at the max.
   base_retry_minutes: 5
   max_retry_minutes: 360
+  # A killed process leaves its staged chunks behind on purpose, so the next run
+  # can resume; this is how long they may go untouched before being swept as
+  # abandoned. Every chunk written refreshes the directory, so only a narration
+  # making no progress at all ages out.
+  staging_max_age_hours: 72
 
 retention:
   # Off by default: nothing is ever deleted unless you ask.

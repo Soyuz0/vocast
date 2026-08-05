@@ -346,3 +346,80 @@ def test_manual_add_still_works_alongside_ingestion(
     titles = {i.find("title").text for i in _items(client.get("/feeds/all.xml").text)}
     assert titles == {"Example Blog - The Bitter Lesson", "Hand Added"}
     assert client.get(f"/audio/{manual.id}.mp3").status_code == 200
+
+
+class CountingEngine(FakeEngine):
+    """Records the chunks it narrated, and can stop mid-article like a kill."""
+
+    def __init__(self, *, break_after: int | None = None) -> None:
+        self.synthesized: list[str] = []
+        self._break_after = break_after
+
+    def synthesize(self, text: str, voice: str | None = None) -> AudioChunk:
+        if self._break_after is not None and len(self.synthesized) >= self._break_after:
+            raise RuntimeError("killed mid-article")
+        self.synthesized.append(text)
+        return super().synthesize(text, voice)
+
+
+def test_a_narration_killed_part_way_resumes_instead_of_starting_over(
+    config: Config,
+    adapter_factory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The reason staging exists: this host has the container killed every few
+    hours, and a three-hour article restarted from zero four times in a day,
+    twice from ~99%."""
+    from datetime import timedelta
+
+    from vocast.ingest.config import resolve_staging_path
+    from vocast.ingest.timeutils import utcnow
+
+    long_article = "This is a real article body. " * 200
+    monkeypatch.setattr(
+        generator_module,
+        "fetch_article_parts",
+        lambda url, *, html_fetcher=None: ("Long Read", long_article, None, []),
+    )
+    context = _build(config, monkeypatch)
+    context.sources.add(
+        name="Example Blog", kind="rss", url="https://example.com/feed.xml"
+    )
+    Poller(
+        sources=context.sources,
+        entries=context.entries,
+        adapter_factory=adapter_factory,
+    ).poll_all()
+    staging = resolve_staging_path(config)
+
+    def worker_with(engine: CountingEngine) -> Worker:
+        return Worker(
+            entries=context.entries,
+            generator=VocastEpisodeGenerator(engine=engine, staging_root=staging),
+            config=context.config.worker,
+        )
+
+    killed = CountingEngine(break_after=2)
+    assert not worker_with(killed).process_next().ok
+
+    resuming = CountingEngine()
+    later = utcnow() + timedelta(minutes=5)
+    outcome = worker_with(resuming).process_next(now=later)
+
+    from_scratch = CountingEngine()
+    uninterrupted = VocastEpisodeGenerator(engine=from_scratch).generate_from_url(
+        "https://example.com/bitter-lesson", title="Long Read"
+    )
+    total = len(from_scratch.synthesized)
+
+    assert outcome.ok
+    assert total > 2, "the article has to be long enough for this to mean anything"
+    assert len(killed.synthesized) == 2
+    assert len(resuming.synthesized) == total - 2, (
+        "the second run must narrate only what the first did not finish"
+    )
+    resumed = library.get_entry(outcome.episode_id)
+    assert (
+        resumed.audio_path().read_bytes() == Path(uninterrupted.audio_path).read_bytes()
+    ), "an article narrated across two runs must sound identical"
+    assert list(staging.iterdir()) == [], "the staged chunks go once the episode exists"

@@ -7,7 +7,7 @@ import sys
 from dataclasses import replace
 
 from .cli_commands import build_context
-from .config import ConfigError
+from .config import ConfigError, resolve_staging_path
 from .context import AppContext
 from .generator import VocastEpisodeGenerator
 from .poller import Poller
@@ -75,11 +75,18 @@ def cmd_poll(args: argparse.Namespace) -> int:
 
 def build_worker(context: AppContext) -> Worker:
     """Assemble a worker around the real vocast pipeline."""
+    from .storage import verify_staging
+
+    # Checked here rather than on the first article: synthesis with nowhere to
+    # checkpoint would be discovered chunks into an hours-long narration.
+    staging_root = resolve_staging_path(context.config)
+    verify_staging(staging_root)
     generator = VocastEpisodeGenerator(
         engine_name=context.config.tts.engine,
         voice=context.config.tts.voice,
         quote_voice=context.config.tts.quote_voice,
         policy=context.fetch_policy(),
+        staging_root=staging_root,
     )
     return Worker(
         entries=context.entries, generator=generator, config=context.config.worker
@@ -154,10 +161,25 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_retention_apply(args: argparse.Namespace) -> int:
+    from datetime import timedelta
+
+    from ..staging import sweep_stale
     from .retention import Retention
 
     context = build_context(args)
     config = context.config.retention
+
+    # Housekeeping either way: chunks of articles abandoned mid-narration are
+    # scratch, not episodes, so no retention policy governs them and the run
+    # that would have cleaned them up is the one that was killed.
+    if not args.dry_run:
+        max_age_hours = context.config.worker.staging_max_age_hours
+        for directory in sweep_stale(
+            resolve_staging_path(context.config),
+            max_age=timedelta(hours=max_age_hours),
+        ):
+            print(f"- removed abandoned synthesis staging {directory}")
+
     if not config.enabled and not args.force:
         print("retention is disabled in config; pass --force to run it once anyway")
         return 0

@@ -309,3 +309,46 @@ def test_deletion_outside_the_library_is_refused(
     assert report.refused
     assert (lib / "old").exists()
     assert (outside / "keep.txt").exists()
+
+
+# --- housekeeping for abandoned synthesis ----------------------------------
+
+
+def test_retention_apply_sweeps_abandoned_synthesis_staging(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    """Chunks of an article nobody is narrating any more are scratch, not
+    episodes: no retention policy governs them, and the run that would have
+    cleaned them up is the one that was killed."""
+    import argparse
+    import os
+    import time
+
+    from vocast.ingest.runtime_commands import cmd_retention_apply
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f"database:\n  path: {tmp_path / 'state.db'}\n"
+        f"storage:\n  library_path: {tmp_path / 'library'}\n"
+        "worker:\n  staging_max_age_hours: 1\n",
+        encoding="utf-8",
+    )
+    abandoned = tmp_path / "staging" / "entry-3151"
+    abandoned.mkdir(parents=True)
+    (abandoned / "chunk-00000.npy").write_bytes(b"samples")
+    long_ago = time.time() - timedelta(hours=9).total_seconds()
+    for path in (abandoned / "chunk-00000.npy", abandoned):
+        os.utime(path, (long_ago, long_ago))
+
+    cmd_retention_apply(
+        argparse.Namespace(
+            config=str(config),
+            db=None,
+            force=False,
+            dry_run=False,
+            include_manual=False,
+        )
+    )
+
+    assert not abandoned.exists()
+    assert "entry-3151" in capsys.readouterr().out

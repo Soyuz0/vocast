@@ -121,6 +121,9 @@ class Worker:
                 content_html=entry.feed_content,
                 prefer_content_html=entry.prefer_feed_content,
                 on_progress=functools.partial(self._record_progress, entry.id),
+                # The entry is the unit of work, so it is what a restart has to
+                # recognize to carry on narrating instead of starting over.
+                resume_key=f"entry-{entry.id}",
             )
         except GenerationCancelled as exc:
             # Deliberate stop: requeue without counting an attempt, so pausing

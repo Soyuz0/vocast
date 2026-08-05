@@ -355,6 +355,67 @@ def test_marker_requirement_passes_once_the_share_is_mounted(tmp_path: Path):
     verify_storage(StorageConfig(library_path=target, require_marker=True))
 
 
+# --- where partial narration is staged -------------------------------------
+
+
+def test_staging_defaults_to_the_database_directory(tmp_path: Path):
+    """Local disk, not the library: the library is typically a network share and
+    staging is a gigabyte of scratch written a chunk at a time."""
+    from vocast.ingest.config import resolve_staging_path
+
+    config = load_config(
+        _write(tmp_path, "database:\n  path: /data/vocast.db\nstorage:\n"),
+        env={},
+    )
+
+    assert resolve_staging_path(config) == Path("/data/staging")
+
+
+def test_staging_path_can_be_set_explicitly(tmp_path: Path):
+    from vocast.ingest.config import resolve_staging_path
+
+    config = load_config(
+        _write(tmp_path, "storage:\n  staging_path: /scratch/vocast\n"), env={}
+    )
+
+    assert resolve_staging_path(config) == Path("/scratch/vocast")
+
+
+def test_staging_path_can_come_from_the_environment(tmp_path: Path):
+    from vocast.ingest.config import resolve_staging_path
+
+    config = load_config(
+        _write(tmp_path, "storage:\n  staging_path: /scratch/vocast\n"),
+        env={"VOCAST_STORAGE_STAGING_PATH": str(tmp_path / "elsewhere")},
+    )
+
+    assert resolve_staging_path(config) == tmp_path / "elsewhere"
+
+
+def test_verify_staging_rejects_an_unwritable_directory(tmp_path: Path):
+    """Narrating for hours with nowhere to checkpoint is worse than not starting."""
+    import os
+
+    from vocast.ingest.storage import StorageUnavailableError, verify_staging
+
+    target = tmp_path / "readonly"
+    target.mkdir()
+    os.chmod(target, 0o500)
+    try:
+        with pytest.raises(StorageUnavailableError, match="not writable"):
+            verify_staging(target)
+    finally:
+        os.chmod(target, 0o700)
+
+
+def test_verify_staging_creates_the_directory(tmp_path: Path):
+    from vocast.ingest.storage import verify_staging
+
+    target = tmp_path / "staging"
+    verify_staging(target)
+    assert target.is_dir()
+
+
 def test_config_show_reports_whether_the_feed_is_protected(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ):

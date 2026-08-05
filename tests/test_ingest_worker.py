@@ -56,6 +56,7 @@ class StubGenerator:
         self.replaced: list[str | None] = []
         self.bodies: list[str | None] = []
         self.preferred: list[bool] = []
+        self.resume_keys: list[str | None] = []
 
     def generate_from_url(
         self,
@@ -68,8 +69,10 @@ class StubGenerator:
         content_html: str | None = None,
         prefer_content_html: bool = False,
         on_progress: Callable[[int, int], None] | None = None,
+        resume_key: str | None = None,
     ) -> GeneratedEpisode:
         self.calls.append((url, title))
+        self.resume_keys.append(resume_key)
         self.bylines.append(byline)
         self.covers.append(cover_url)
         self.replaced.append(replace_episode_id)
@@ -137,6 +140,19 @@ def test_worker_passes_the_article_url_and_title_to_the_pipeline(
     _worker(entries, generator).process_next()
 
     assert generator.calls == [("https://example.com/post", "Article post")]
+
+
+def test_worker_names_the_entry_so_a_restart_can_resume_its_narration(
+    entries: EntryRepository, source_id: int
+):
+    """The key has to identify the same work item across process restarts, and
+    the entry is the unit of work."""
+    entry = _queue(entries, source_id)
+    generator = StubGenerator()
+
+    _worker(entries, generator).process_next()
+
+    assert generator.resume_keys == [f"entry-{entry.id}"]
 
 
 def test_process_next_returns_none_on_an_empty_queue(entries: EntryRepository):

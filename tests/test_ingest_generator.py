@@ -31,10 +31,15 @@ class FakeEngine:
     max_chars = 1800
     default_voice = "af_heart"
 
-    def __init__(self) -> None:
+    def __init__(self, *, break_after: int | None = None) -> None:
         self.synthesized: list[str] = []
+        #: Stop mid-article after this many chunks, the way a dying engine or a
+        #: killed process does.
+        self._break_after = break_after
 
     def synthesize(self, text: str, voice: str | None = None) -> AudioChunk:
+        if self._break_after is not None and len(self.synthesized) >= self._break_after:
+            raise RuntimeError("engine died")
         self.synthesized.append(text)
         return AudioChunk(np.zeros(2400, dtype=np.float32), self.sample_rate)
 
@@ -911,3 +916,117 @@ def test_a_full_page_is_not_displaced_by_a_similar_feed_body(
     )
 
     assert "Sentence one." in library.get_entry(episode.episode_id).article_text()
+
+
+# --- checkpointing partial narration ---------------------------------------
+
+
+LONG_ARTICLE = "Sentence one. " * 400
+
+
+def test_finished_episode_leaves_no_staged_chunks_behind(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _stub_extraction(monkeypatch)
+    staging = tmp_path / "staging"
+    gen = VocastEpisodeGenerator(engine=engine, staging_root=staging)
+
+    gen.generate_from_url("https://example.com/a", resume_key="entry-7")
+
+    assert not (staging / "entry-7").exists()
+
+
+def test_a_cancelled_narration_keeps_its_chunks_for_the_next_attempt(
+    lib: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Cancellation is a pause or a shutdown, and the entry is requeued."""
+    _stub_extraction(monkeypatch, text=LONG_ARTICLE)
+    staging = tmp_path / "staging"
+    allowed = {"chunks": 2}
+
+    def keep_going() -> bool:
+        allowed["chunks"] -= 1
+        return allowed["chunks"] > 0
+
+    stopped = VocastEpisodeGenerator(
+        engine=FakeEngine(), staging_root=staging, should_continue=keep_going
+    )
+    with pytest.raises(GenerationCancelled):
+        stopped.generate_from_url("https://example.com/a", resume_key="entry-7")
+    staged = sorted((staging / "entry-7").glob("chunk-*.npy"))
+
+    resuming = FakeEngine()
+    VocastEpisodeGenerator(engine=resuming, staging_root=staging).generate_from_url(
+        "https://example.com/a", resume_key="entry-7"
+    )
+
+    assert len(staged) == 1, "the chunk narrated before the pause must survive it"
+    assert len(resuming.synthesized) == _chunk_count(LONG_ARTICLE) - 1
+
+
+def test_a_broken_narration_resumes_where_it_stopped(
+    lib: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _stub_extraction(monkeypatch, text=LONG_ARTICLE)
+    staging = tmp_path / "staging"
+    with pytest.raises(TransientGenerationError):
+        VocastEpisodeGenerator(
+            engine=FakeEngine(break_after=2), staging_root=staging
+        ).generate_from_url("https://example.com/a", resume_key="entry-7")
+
+    resuming = FakeEngine()
+    episode = VocastEpisodeGenerator(
+        engine=resuming, staging_root=staging
+    ).generate_from_url("https://example.com/a", resume_key="entry-7")
+
+    assert len(resuming.synthesized) == _chunk_count(LONG_ARTICLE) - 2
+    uninterrupted = VocastEpisodeGenerator(engine=FakeEngine()).generate_from_url(
+        "https://example.com/a"
+    )
+    assert episode.duration_seconds == uninterrupted.duration_seconds, (
+        "an article narrated across two runs must be as long as one narrated in one"
+    )
+
+
+def test_nothing_is_staged_without_a_resume_key(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A one-off has nothing to resume into, so it stages nothing."""
+    _stub_extraction(monkeypatch)
+    staging = tmp_path / "staging"
+
+    VocastEpisodeGenerator(engine=engine, staging_root=staging).generate_from_url(
+        "https://example.com/a"
+    )
+
+    assert not staging.exists()
+
+
+def test_a_resume_key_cannot_escape_the_staging_root(
+    lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """The staging directory is deleted wholesale once the episode exists, so
+    where a key points has to be ours to decide, not the caller's."""
+    _stub_extraction(monkeypatch)
+    staging = tmp_path / "staging"
+    outside = tmp_path / "keep-me"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("do not delete", encoding="utf-8")
+
+    episode = VocastEpisodeGenerator(
+        engine=engine, staging_root=staging
+    ).generate_from_url("https://example.com/a", resume_key="../keep-me")
+
+    assert episode.episode_id
+    assert (outside / "precious.txt").exists()
+    assert list(staging.iterdir()) == [], "the staged chunks were inside the root"
+
+
+def _chunk_count(article_text: str) -> int:
+    """How many chunks the narration of this article splits into."""
+    from vocast.chunking import chunk_text
+
+    narration = generator_module.build_narration(
+        "Extracted Title", None, article_text.strip()
+    )
+    return len(chunk_text(narration, FakeEngine.max_chars))

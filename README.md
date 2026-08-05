@@ -181,6 +181,10 @@ Design points worth knowing:
 - **Episode GUIDs are stable forever.** They are library entry ids, written once
   when the audio is created, so re-rendering a feed or renaming an episode never
   makes a podcast app re-download anything.
+- **Narration is checkpointed a chunk at a time.** Each finished chunk is written
+  to the staging directory as raw samples, so a restart resumes an article rather
+  than re-narrating it, and only one chunk is ever held in memory. See
+  [Resuming a long article](#resuming-a-long-article).
 
 | Component | Where |
 |---|---|
@@ -189,6 +193,7 @@ Design points worth knowing:
 | Schema and migrations | `src/vocast/ingest/db.py` |
 | Poller | `src/vocast/ingest/poller.py` |
 | Worker and retries | `src/vocast/ingest/worker.py` |
+| Chunk checkpoints and resume | `src/vocast/staging.py` |
 | Pipeline seam | `src/vocast/ingest/generator.py` |
 | Feed rendering | `src/vocast/ingest/feeds.py` |
 | HTTP surface | `src/vocast/ingest/api.py` |
@@ -734,6 +739,41 @@ claims stolen.
 > recorded showed four and three converging once heat-soaked, with four
 > periodically collapsing to the CPU's minimum frequency.
 
+## Resuming a long article
+
+A three-hour article is a hundred-odd chunks and hours of CPU. Each finished
+chunk is written to a staging directory as raw samples, and the finished audio is
+assembled from those files, which buys two things:
+
+- **A restart resumes.** The next run recognizes the chunks and narrates only
+  what is missing. Before this, an article killed at 99% was worth exactly as
+  much as one killed at 0%: one article on one deployment restarted from zero
+  four times in a day, twice from near the end.
+- **Peak memory is one chunk, not the article.** Holding every chunk until the
+  end costs about 10 MB per chunk — a gigabyte for a long article, twice that
+  during the join.
+
+```yaml
+storage:
+  staging_path: /data/staging   # default: a `staging` directory beside the database
+worker:
+  staging_max_age_hours: 72     # sweep chunks nothing has touched for this long
+```
+
+Local disk, not the library: staging is scratch written a chunk at a time, and
+the library is often a network share. A staging directory that cannot be written
+to stops the service at startup instead of narrating with nowhere to checkpoint.
+
+Chunks are only ever reused when they provably belong to the same narration. A
+fingerprint over the chunk texts, the voice each is read in, and the engine
+decides that; if anything differs, they are deleted and the article is narrated
+again. Splicing two articles together would be far worse than repeating work.
+
+Chunks left behind by a killed process are the point, so nothing removes them
+eagerly. `staging_max_age_hours` sweeps directories nothing has touched for that
+long, at startup and on `vocast retention apply`. Every chunk written refreshes
+the directory, so a narration that is still making progress is never swept.
+
 ## Retention
 
 Off by default — nothing is ever deleted unless you ask.
@@ -1019,15 +1059,18 @@ file is missing from the library while the metadata remains.
 
 **An entry is stuck in `processing`.** A worker died mid-synthesis. It is
 requeued automatically after `worker.processing_timeout_minutes` (60 by
-default); `vocast entry retry <id> --force` does it now.
+default); `vocast entry retry <id> --force` does it now. The chunks it had
+already narrated are kept, so the retry carries on rather than starting over.
 
 **`ModuleNotFoundError: No module named 'kokoro'`.** Installed without
 dependencies. The ingestion CLI and tests run without Kokoro, but synthesis
 needs it: `pip install vocast`.
 
 **Container is killed mid-episode.** PyTorch needs headroom; raise
-`mem_limit` past 2 GB. The entry returns to `pending` and is retried, so nothing
-is lost.
+`mem_limit` past 2 GB. The entry returns to `pending` and is retried, and the
+chunks it had already narrated are on disk, so the retry resumes rather than
+re-narrating the article. Note that a *host* running out of memory kills the
+process regardless of the container's limit.
 
 **Weights re-download on every container start.** `HF_HOME` must land on the
 `/data` volume. The bundled Compose file handles this.

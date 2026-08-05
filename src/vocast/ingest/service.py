@@ -8,15 +8,17 @@ hooks start and stop them, so Ctrl-C and `docker stop` both shut down cleanly.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
+from ..staging import sweep_stale
 from .api import ServiceState
-from .config import Config
+from .config import Config, resolve_staging_path
 from .context import AppContext
 from .logs import get_logger, kv
 from .loops import IntervalLoop
 from .poller import Poller
 from .retention import Retention
-from .storage import verify_storage
+from .storage import verify_staging, verify_storage
 from .tuning import apply_compute_threads
 from .worker import Worker, WorkerLoop
 
@@ -98,13 +100,14 @@ class Service:
                 config.worker.concurrency, config.worker.threads_per_worker
             )
 
+        if self._with_worker:
+            self._sweep_abandoned_staging()
+
         if self._with_worker and config.worker.reclaim_on_start:
             # Done once, before any worker starts: at this point nothing in
             # this process holds a claim, so anything still marked processing
             # was abandoned by a previous run. Doing it per worker would let
             # one steal a sibling's freshly claimed entry.
-            from datetime import timedelta
-
             recovered = self.context.entries.reclaim_stale(timeout=timedelta(0))
             if recovered:
                 log.warning(
@@ -162,6 +165,25 @@ class Service:
             name="vocast-retention",
         )
 
+    def _sweep_abandoned_staging(self) -> None:
+        """Drop chunks of articles nothing is narrating any more.
+
+        Startup is when this matters: the usual reason chunks are left behind is
+        that the process was killed, and this is the run that follows. Only
+        directories untouched for staging_max_age_hours go, so the article a
+        restart is about to resume is never the one swept.
+        """
+        config = self.context.config
+        swept = sweep_stale(
+            resolve_staging_path(config),
+            max_age=timedelta(hours=config.worker.staging_max_age_hours),
+        )
+        if swept:
+            log.warning(
+                "removed abandoned synthesis staging %s",
+                kv(count=len(swept), max_age_hours=config.worker.staging_max_age_hours),
+            )
+
     def _build_worker(self) -> Worker:
         from .generator import VocastEpisodeGenerator
 
@@ -170,6 +192,7 @@ class Service:
             voice=self.context.config.tts.voice,
             quote_voice=self.context.config.tts.quote_voice,
             policy=self.context.fetch_policy(),
+            staging_root=resolve_staging_path(self.context.config),
             # Checked between chunks, so pausing interrupts a long article
             # instead of waiting out what can be hours of synthesis.
             should_continue=self._keep_synthesizing,
@@ -244,9 +267,12 @@ def run_service(
 ) -> int:
     import uvicorn
 
-    # Before anything else: if we cannot store episodes there is no point
-    # discovering or synthesizing them.
+    # Before anything else: if we cannot store episodes, or cannot checkpoint
+    # one while it is being made, there is no point discovering or synthesizing
+    # them.
     verify_storage(config.storage)
+    if with_worker:
+        verify_staging(resolve_staging_path(config))
 
     context = AppContext.create(config)
     context.sync_configured_sources()

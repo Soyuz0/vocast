@@ -1,5 +1,6 @@
 import logging
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -31,14 +32,47 @@ def concat_with_silence(chunks: list[AudioChunk], gap_ms: int = 120) -> AudioChu
     sr = chunks[0].sample_rate
     if any(c.sample_rate != sr for c in chunks):
         raise ValueError("sample rates differ across chunks")
-    samples_per_ms = sr / 1000
-    gap = np.zeros(int(samples_per_ms * gap_ms), dtype=np.float32)
-    parts: list[np.ndarray] = []
-    for i, c in enumerate(chunks):
-        if i:
-            parts.append(gap)
-        parts.append(c.samples)
-    return AudioChunk(np.concatenate(parts), sr)
+    return join_with_silence([c.samples for c in chunks], sample_rate=sr, gap_ms=gap_ms)
+
+
+def join_with_silence(
+    parts: Sequence[np.ndarray], *, sample_rate: int, gap_ms: int
+) -> AudioChunk:
+    """Join runs of samples end to end, gap_ms of silence between each.
+
+    Written into one pre-allocated array rather than assembled with
+    np.concatenate, which holds the parts and the joined copy at the same time:
+    for a three-hour article that second copy is another gigabyte. It also lets
+    the parts be memory maps of staged chunk files (see vocast.staging), where
+    materializing them all at once would defeat the point of staging them.
+
+    The silence is the zeros the array is created with, and the promotion rule
+    matches concatenating a float32 gap with the parts, so the result is
+    bit-for-bit what np.concatenate produced.
+
+    The sequence is walked twice, once for the layout and once to fill it, and
+    each part is used and released before the next is asked for. A lazy sequence
+    of files therefore never has more than one part in memory at a time.
+    """
+    if not parts:
+        raise ValueError("no audio chunks to concatenate")
+    gap_samples = int(sample_rate / 1000 * gap_ms)
+    gaps = len(parts) - 1
+    lengths: list[int] = []
+    dtypes: list[np.dtype] = []
+    for part in parts:
+        lengths.append(len(part))
+        dtypes.append(part.dtype)
+    if gaps:
+        dtypes.append(np.dtype(np.float32))
+    joined = np.zeros(sum(lengths) + gaps * gap_samples, dtype=np.result_type(*dtypes))
+    at = 0
+    for index, length in enumerate(lengths):
+        if index:
+            at += gap_samples
+        joined[at : at + length] = parts[index]
+        at += length
+    return AudioChunk(joined, sample_rate)
 
 
 def write_audio(

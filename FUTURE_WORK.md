@@ -86,6 +86,41 @@ crash will be indistinguishable from the noise.
 **Proposed fix.** Release the ONNX session, and whatever espeak holds, before
 interpreter teardown, rather than leaving it to garbage collection at exit.
 
+## Encoding the mp3 is now the memory peak, not synthesis
+
+**Problem.** Synthesis no longer holds the whole article in memory: chunks are
+staged to disk and joined one at a time. Encoding does. `write_audio` clips the
+samples into a new array, multiplies that into another, then converts to int16
+and again to bytes, so a finished article is held four times over in different
+forms.
+
+**Evidence.** A synthetic 98-minute article (107 chunks, half the size of the
+real one that prompted the change) peaked at **583 MiB** through synthesis and
+**1924 MiB** once the mp3 was written — the encode more than tripled it. Doubled
+for a 195-minute article that is ~3.8 GiB, which is consistent with the 4.42 GiB
+the container was observed to peak at, and with a host that had 3.3 GiB free
+killing the process.
+
+**Proposed fix.** Convert to int16 in slices into one pre-allocated buffer, which
+is arithmetically identical per sample and removes two full-size float copies.
+Feeding ffmpeg incrementally instead of through one `AudioSegment` would remove
+the rest, but changes how the encoder is invoked, so it needs the output verified
+byte-for-byte before and after rather than assumed.
+
+**Why it is still open.** It is a separate concern from checkpointing, and every
+episode's audio depends on getting it exactly right.
+
+## Staged chunks survive an article the worker has given up on
+
+Chunks are removed when an episode is written, when synthesis rejects the input,
+and by the age sweep. They are deliberately kept when a narration is cancelled or
+fails transiently, because the entry is going back on the queue. Nothing removes
+them at the moment an entry exhausts its retries and lands in `failed`: the
+worker knows that happened, but the staging path belongs to the generator. Such a
+directory sits until `worker.staging_max_age_hours` sweeps it, costing up to a
+gigabyte of local disk in the meantime. Passing the failure back to whatever owns
+the staging directory would close it.
+
 ## Retention evicts the wrong end of the library
 
 Retention deletes earliest-synthesized first while narration works

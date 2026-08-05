@@ -18,6 +18,7 @@ Environment variable convention
     VOCAST_FRESHRSS_MARK_READ_ON_DOWNLOAD
     VOCAST_DATABASE_PATH
     VOCAST_STORAGE_LIBRARY_PATH
+    VOCAST_STORAGE_STAGING_PATH
     VOCAST_STORAGE_REQUIRE_MARKER
     VOCAST_POLLING_DEFAULT_INTERVAL_MINUTES
     VOCAST_POLLING_FULL_POLL_HOURS
@@ -30,6 +31,7 @@ Environment variable convention
     VOCAST_WORKER_RECLAIM_ON_START
     VOCAST_WORKER_NICE
     VOCAST_WORKER_THREADS_PER_WORKER
+    VOCAST_WORKER_STAGING_MAX_AGE_HOURS
     VOCAST_RETENTION_ENABLED / _MAX_AGE_DAYS / _MAX_EPISODES / _INCLUDE_MANUAL
     VOCAST_TTS_ENGINE / VOCAST_TTS_VOICE
     VOCAST_ADMIN_TOKEN
@@ -113,6 +115,11 @@ STORAGE_MARKER = ".vocast-storage"
 @dataclass(frozen=True)
 class StorageConfig:
     library_path: Path = VOCAST_HOME / "library"
+    #: Scratch space for chunks of articles still being narrated. Unset puts it
+    #: beside the database rather than in the library: it is churn, not content,
+    #: and the library is typically a network share while the database has to be
+    #: on local disk anyway. See resolve_staging_path.
+    staging_path: Path | None = None
     #: Refuse to start unless STORAGE_MARKER exists in library_path. Guards a
     #: network mount: if it is not ready, the bind mount exposes an empty
     #: directory and episodes would be written somewhere they are never served
@@ -150,6 +157,13 @@ class WorkerConfig:
     #: more). Synthesis is CPU-bound; nicing it keeps the machine usable for
     #: interactive work without slowing throughput much when otherwise idle.
     nice: int = 0
+    #: How long staged chunks of an unfinished article may go untouched before
+    #: they are swept as abandoned. A process killed mid-article leaves them
+    #: behind on purpose so the next run resumes; this is what stops those
+    #: leftovers accumulating a gigabyte at a time. Generous, because an article
+    #: can take a working day of CPU across several restarts and every chunk
+    #: written refreshes the directory.
+    staging_max_age_hours: int = 72
     #: Compute threads each worker's TTS engine may use. None divides the
     #: available CPUs among the workers. Left to the library's own default,
     #: every worker grabs every core, and N workers oversubscribe the machine
@@ -217,6 +231,22 @@ class Config:
     #: Global default for reaching LAN/loopback hosts; overridable per source.
     allow_private_urls: bool = False
     source_path: Path | None = None
+
+
+def resolve_staging_path(config: Config) -> Path:
+    """Where partially narrated articles are checkpointed.
+
+    Defaults to a directory beside the database rather than inside the library.
+    Staging is scratch -- roughly a gigabyte per long article, written a chunk at
+    a time and deleted when the episode is made -- whereas the library is the
+    permanent audio and is often a network share, where a write per chunk is
+    both slower and a worse failure mode. The database already has to live on
+    local storage, so its directory is the one place known to be local and
+    writable.
+    """
+    if config.storage.staging_path is not None:
+        return config.storage.staging_path
+    return config.database.path.parent / "staging"
 
 
 def load_config(
@@ -349,6 +379,7 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
             library_path=Path(
                 str(storage.get("library_path", StorageConfig.library_path))
             ).expanduser(),
+            staging_path=_as_optional_path(storage.get("staging_path")),
             require_marker=_as_bool(
                 storage.get("require_marker"),
                 StorageConfig.require_marker,
@@ -411,6 +442,12 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 "worker.reclaim_on_start",
             ),
             nice=_as_int(worker.get("nice"), WorkerConfig.nice, "worker.nice"),
+            staging_max_age_hours=_as_int(
+                worker.get("staging_max_age_hours"),
+                WorkerConfig.staging_max_age_hours,
+                "worker.staging_max_age_hours",
+                minimum=1,
+            ),
             threads_per_worker=_as_optional_int(
                 worker.get("threads_per_worker"),
                 WorkerConfig.threads_per_worker,
@@ -522,6 +559,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ),
     ("VOCAST_DATABASE_PATH", "database", "path", "path"),
     ("VOCAST_STORAGE_LIBRARY_PATH", "storage", "library_path", "path"),
+    ("VOCAST_STORAGE_STAGING_PATH", "storage", "staging_path", "opt_path"),
     ("VOCAST_STORAGE_REQUIRE_MARKER", "storage", "require_marker", "bool"),
     (
         "VOCAST_POLLING_DEFAULT_INTERVAL_MINUTES",
@@ -543,6 +581,12 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_WORKER_NEWEST_FIRST", "worker", "newest_first", "bool"),
     ("VOCAST_WORKER_RECLAIM_ON_START", "worker", "reclaim_on_start", "bool"),
     ("VOCAST_WORKER_NICE", "worker", "nice", "int"),
+    (
+        "VOCAST_WORKER_STAGING_MAX_AGE_HOURS",
+        "worker",
+        "staging_max_age_hours",
+        "int",
+    ),
     ("VOCAST_WORKER_THREADS_PER_WORKER", "worker", "threads_per_worker", "opt_int"),
     ("VOCAST_RETENTION_ENABLED", "retention", "enabled", "bool"),
     ("VOCAST_RETENTION_MAX_AGE_DAYS", "retention", "max_age_days", "opt_int"),
@@ -580,6 +624,8 @@ def _coerce_env(raw: str, kind: str, name: str) -> Any:
         return raw or None
     if kind == "path":
         return Path(raw).expanduser()
+    if kind == "opt_path":
+        return _as_optional_path(raw)
     if kind == "base_url":
         return _clean_base_url(raw)
     if kind == "bool":
@@ -632,6 +678,11 @@ def _as_optional_int(value: Any, default: int | None, where: str) -> int | None:
     if text in ("", "none", "null", "unlimited"):
         return None
     return _as_int(value, default or 0, where, minimum=0)
+
+
+def _as_optional_path(value: Any) -> Path | None:
+    text = _as_optional_str(value)
+    return Path(text).expanduser() if text else None
 
 
 def _as_optional_str(value: Any) -> str | None:

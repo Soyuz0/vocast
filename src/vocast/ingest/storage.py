@@ -39,8 +39,28 @@ def verify_storage(config: StorageConfig) -> None:
             f"cannot create the episode library at {path}: {exc}"
         ) from exc
 
-    _require_writable(path)
+    _require_writable(path, "episode library")
     log.info("storage ready %s", kv(library_path=path))
+
+
+def verify_staging(path: Path) -> None:
+    """Check the synthesis staging directory is present and writable.
+
+    Same reasoning as the library: partially narrated articles are checkpointed
+    here so a restart resumes instead of starting over, and a staging area that
+    cannot be written to would only be discovered chunks into an article. Better
+    to refuse to start, which under a restart policy heals itself once the path
+    is usable.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise StorageUnavailableError(
+            f"cannot create the synthesis staging directory at {path}: {exc}"
+        ) from exc
+
+    _require_writable(path, "synthesis staging directory")
+    log.info("staging ready %s", kv(staging_path=path))
 
 
 def _require_marker(path: Path) -> None:
@@ -55,13 +75,13 @@ def _require_marker(path: Path) -> None:
     )
 
 
-def _require_writable(path: Path) -> None:
+def _require_writable(path: Path, what: str) -> None:
     probe = path / f".vocast-write-test-{os.getpid()}"
     try:
         probe.write_bytes(b"")
     except OSError as exc:
         raise StorageUnavailableError(
-            f"the episode library at {path} is not writable: {exc}. "
+            f"the {what} at {path} is not writable: {exc}. "
             "Check the mount, and that the process user owns it."
         ) from exc
     finally:
