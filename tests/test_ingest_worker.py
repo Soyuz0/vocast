@@ -57,6 +57,10 @@ class StubGenerator:
         self.bodies: list[str | None] = []
         self.preferred: list[bool] = []
         self.resume_keys: list[str | None] = []
+        self.discarded_resume_keys: list[str] = []
+
+    def discard_resume(self, resume_key: str) -> None:
+        self.discarded_resume_keys.append(resume_key)
 
     def generate_from_url(
         self,
@@ -257,6 +261,7 @@ def test_retries_are_exhausted_into_failed(entries: EntryRepository, source_id: 
     assert stored.status is EntryStatus.FAILED
     assert stored.retry_count == 5
     assert len(generator.calls) == 5
+    assert generator.discarded_resume_keys == [f"entry-{entry.id}"]
 
 
 # --- backoff policy --------------------------------------------------------
@@ -287,6 +292,7 @@ def test_permanent_failure_skips_retries(entries: EntryRepository, source_id: in
     stored = entries.get(entry.id)
     assert stored.status is EntryStatus.FAILED
     assert "404 gone" in stored.error_message
+    assert generator.discarded_resume_keys == [f"entry-{entry.id}"]
 
 
 def test_failed_entry_can_be_requeued_and_then_succeeds(

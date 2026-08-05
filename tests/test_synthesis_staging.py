@@ -7,6 +7,10 @@ round-trip an array.
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -236,6 +240,68 @@ def test_a_chunk_left_half_written_is_not_spliced_into_the_audio(tmp_path: Path)
     assert not truncated.exists() or truncated.stat().st_size > 0
 
 
+def test_a_chunk_with_the_wrong_dtype_is_not_reused(tmp_path: Path):
+    passages = _passages(sentences=12)
+    staging_dir = tmp_path / "stage"
+    with pytest.raises(Killed):
+        _narrate(passages, ToneEngine(die_after=4), staging_dir=staging_dir)
+    np.save(staging_dir / "chunk-00000.npy", np.ones(11, dtype=np.float64))
+
+    engine = ToneEngine()
+    resumed = _narrate(passages, engine, staging_dir=staging_dir)
+
+    expected = _narrate(passages, ToneEngine())
+    assert resumed.samples.tobytes() == expected.samples.tobytes()
+    assert resumed.samples.dtype == expected.samples.dtype
+
+
+def test_a_manifest_with_the_wrong_sample_rate_is_not_reused(tmp_path: Path):
+    passages = _passages(sentences=12)
+    staging_dir = tmp_path / "stage"
+    with pytest.raises(Killed):
+        _narrate(passages, ToneEngine(die_after=4), staging_dir=staging_dir)
+    manifest_path = staging_dir / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sample_rate"] = 48000
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    engine = ToneEngine()
+    resumed = _narrate(passages, engine, staging_dir=staging_dir)
+
+    assert resumed.sample_rate == ToneEngine.sample_rate
+    assert resumed.samples.tobytes() == _narrate(
+        passages, ToneEngine()
+    ).samples.tobytes()
+
+
+def test_chunks_from_the_original_staging_manifest_remain_resumable(tmp_path: Path):
+    passages = _passages(sentences=12)
+    staging_dir = tmp_path / "stage"
+    with pytest.raises(Killed):
+        _narrate(passages, ToneEngine(die_after=4), staging_dir=staging_dir)
+    manifest_path = staging_dir / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("dtype")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    engine = ToneEngine()
+    _narrate(passages, engine, staging_dir=staging_dir)
+
+    assert len(engine.synthesized) == _chunk_count(passages, engine) - 4
+
+
+def test_chunks_beyond_the_narration_are_not_spliced_in(tmp_path: Path):
+    passages = _passages()
+    staging_dir = tmp_path / "stage"
+    expected = _narrate(passages, ToneEngine(), staging_dir=staging_dir)
+    chunks = sorted(staging_dir.glob("chunk-*.npy"))
+    shutil.copyfile(chunks[-1], staging_dir / f"chunk-{len(chunks):05d}.npy")
+
+    resumed = _narrate(passages, ToneEngine(), staging_dir=staging_dir)
+
+    assert resumed.samples.tobytes() == expected.samples.tobytes()
+
+
 # --- refusing to reuse someone else's chunks -------------------------------
 
 
@@ -343,6 +409,28 @@ def test_an_unwritable_staging_area_stops_synthesis(tmp_path: Path):
     assert engine.synthesized == []
 
 
+def test_disk_full_while_writing_a_chunk_fails_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def disk_full(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("vocast.staging.np.save", disk_full)
+
+    with pytest.raises(StagingUnavailableError, match="No space left on device"):
+        _narrate(_passages(), ToneEngine(), staging_dir=tmp_path / "stage")
+    assert not list((tmp_path / "stage").glob("chunk-*.npy"))
+
+
+def test_two_writers_cannot_open_the_same_staging_directory(tmp_path: Path):
+    staging_dir = tmp_path / "stage"
+    first = StagedChunks.open(staging_dir, fingerprint="abc")
+
+    with pytest.raises(StagingUnavailableError, match="already in use"):
+        StagedChunks.open(staging_dir, fingerprint="abc")
+    assert first.completed == 0
+
+
 def test_chunks_must_be_stored_in_order(tmp_path: Path):
     staged = StagedChunks.open(tmp_path / "stage", fingerprint="abc")
 
@@ -389,6 +477,19 @@ def test_sweeping_judges_age_on_the_newest_chunk(tmp_path: Path):
 
     assert sweep_stale(root, max_age=timedelta(hours=72)) == []
     assert recent_chunk.exists()
+
+
+def test_sweeping_does_not_delete_staging_in_active_use(tmp_path: Path):
+    root = tmp_path / "staging"
+    directory = root / "entry-1"
+    staged = StagedChunks.open(directory, fingerprint="abc")
+    staged.store(0, AudioChunk(np.zeros(8, dtype=np.float32), 24000))
+    long_ago = time.time() - timedelta(days=9).total_seconds()
+    for path in [*directory.iterdir(), directory]:
+        os.utime(path, (long_ago, long_ago))
+
+    assert sweep_stale(root, max_age=timedelta(hours=72)) == []
+    assert directory.exists()
 
 
 def test_sweeping_a_missing_root_is_not_an_error(tmp_path: Path):

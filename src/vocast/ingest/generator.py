@@ -166,6 +166,8 @@ class EpisodeGenerator(Protocol):
         resume_key: str | None = None,
     ) -> GeneratedEpisode: ...
 
+    def discard_resume(self, resume_key: str) -> None: ...
+
 
 class VocastEpisodeGenerator:
     """Drives the existing vocast pipeline for one article.
@@ -217,15 +219,20 @@ class VocastEpisodeGenerator:
         pass nothing get no checkpointing, which is right for a one-off: there is
         nothing to resume into.
         """
-        if content_html and prefer_content_html:
-            # The post's own text, supplied because its link points elsewhere.
-            extracted_title, text, article_cover, quotes = self._from_html(
-                content_html, url
-            )
-        else:
-            extracted_title, text, article_cover, quotes = self._extract_or_fall_back(
-                url, content_html
-            )
+        staging_dir = self._staging_dir(resume_key)
+        try:
+            if content_html and prefer_content_html:
+                # The post's own text, supplied because its link points elsewhere.
+                extracted_title, text, article_cover, quotes = self._from_html(
+                    content_html, url
+                )
+            else:
+                extracted_title, text, article_cover, quotes = (
+                    self._extract_or_fall_back(url, content_html)
+                )
+        except PermanentGenerationError:
+            self._discard_staging(staging_dir)
+            raise
         # A supplied cover is the publication's own artwork, which keeps every
         # episode from a source visually consistent; the article's own image is
         # only a fallback.
@@ -238,7 +245,6 @@ class VocastEpisodeGenerator:
         narration = f"{heading}\n\n{spoken_body}"
         passages = self._passages(heading, spoken_body, quotes, voice)
 
-        staging_dir = self._staging_dir(resume_key)
         try:
             chunk = synthesize_passages(
                 passages,
@@ -329,6 +335,10 @@ class VocastEpisodeGenerator:
             else f"key-{_hash_text(resume_key)[:16]}"
         )
         return Path(self._staging_root) / name
+
+    def discard_resume(self, resume_key: str) -> None:
+        """Discard checkpointed work once its queue entry will not be retried."""
+        self._discard_staging(self._staging_dir(resume_key))
 
     def _discard_staging(self, staging_dir: Path | None) -> None:
         if staging_dir is not None:

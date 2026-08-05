@@ -13,6 +13,7 @@ and each entry here is a specific, verified case.
 from __future__ import annotations
 
 import urllib.parse
+from typing import overload
 
 #: Broken host -> working host serving the same paths.
 #:
@@ -24,6 +25,14 @@ HOST_REWRITES: dict[str, str] = {
     "vitalik.ca": "vitalik.eth.limo",
     "www.vitalik.ca": "vitalik.eth.limo",
 }
+
+
+@overload
+def corrected_url(url: str) -> str: ...
+
+
+@overload
+def corrected_url(url: None) -> None: ...
 
 
 def corrected_url(url: str | None) -> str | None:

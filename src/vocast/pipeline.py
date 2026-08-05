@@ -98,6 +98,8 @@ def _open_sink(
         fingerprint=narration_fingerprint(
             plan, engine_id=engine_fingerprint(engine), gap_ms=gap_ms
         ),
+        expected_chunks=len(plan),
+        expected_sample_rate=engine.sample_rate,
     )
 
 

@@ -988,6 +988,26 @@ def test_a_broken_narration_resumes_where_it_stopped(
     )
 
 
+def test_a_permanent_failure_discards_chunks_from_an_earlier_attempt(
+    lib: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    staging = tmp_path / "staging"
+    _stub_extraction(monkeypatch, text=LONG_ARTICLE)
+    with pytest.raises(TransientGenerationError):
+        VocastEpisodeGenerator(
+            engine=FakeEngine(break_after=1), staging_root=staging
+        ).generate_from_url("https://example.com/a", resume_key="entry-7")
+    assert (staging / "entry-7").exists()
+
+    _stub_extraction_raising(monkeypatch, BlockedURLError("blocked forever"))
+    with pytest.raises(PermanentGenerationError):
+        VocastEpisodeGenerator(engine=FakeEngine(), staging_root=staging).generate_from_url(
+            "https://example.com/a", resume_key="entry-7"
+        )
+
+    assert not (staging / "entry-7").exists()
+
+
 def test_nothing_is_staged_without_a_resume_key(
     lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):

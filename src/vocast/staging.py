@@ -28,7 +28,13 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
-from typing import Protocol
+from typing import IO, BinaryIO, Protocol
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised on Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
 
 import numpy as np
 
@@ -42,6 +48,7 @@ MANIFEST_NAME = "manifest.json"
 _CHUNK_PREFIX = "chunk-"
 _CHUNK_SUFFIX = ".npy"
 _UNFINISHED_SUFFIX = ".part"
+_LOCK_NAME = ".lock"
 
 #: Bumped whenever the layout on disk or the inputs to the fingerprint change,
 #: so chunks written by an older version are discarded rather than misread.
@@ -138,16 +145,45 @@ class StagedChunks:
     partial file that is never mistaken for a chunk.
     """
 
-    def __init__(self, directory: Path, *, fingerprint: str) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        fingerprint: str,
+        expected_chunks: int | None = None,
+        expected_sample_rate: int | None = None,
+        expected_dtype: np.dtype | type[np.floating] = np.float32,
+    ) -> None:
         self._directory = Path(directory)
         self._fingerprint = fingerprint
+        self._expected_chunks = expected_chunks
+        self._expected_sample_rate = expected_sample_rate
+        self._expected_dtype = np.dtype(expected_dtype)
         self._completed = 0
         self._sample_rate: int | None = None
+        self._dtype: np.dtype | None = self._expected_dtype
+        self._lock_handle: IO[bytes] | None = None
 
     @classmethod
-    def open(cls, directory: Path | str, *, fingerprint: str) -> StagedChunks:
+    def open(
+        cls,
+        directory: Path | str,
+        *,
+        fingerprint: str,
+        expected_chunks: int | None = None,
+        expected_sample_rate: int | None = None,
+        expected_dtype: np.dtype | type[np.floating] = np.float32,
+    ) -> StagedChunks:
         """Adopt chunks left by an earlier run, or start the directory afresh."""
-        staged = cls(Path(directory), fingerprint=fingerprint)
+        staged = cls(
+            Path(directory),
+            fingerprint=fingerprint,
+            expected_chunks=expected_chunks,
+            expected_sample_rate=expected_sample_rate,
+            expected_dtype=expected_dtype,
+        )
+        staged._make_directory()
+        staged._acquire_lock()
         staged._prepare()
         return staged
 
@@ -163,11 +199,15 @@ class StagedChunks:
             )
         if self._sample_rate is None:
             self._sample_rate = chunk.sample_rate
+            if self._dtype is None:
+                self._dtype = chunk.samples.dtype
             self._write_manifest()
         elif chunk.sample_rate != self._sample_rate:
             # The same message concat_with_silence would have raised, because
             # this is the same defect: audio that cannot be joined coherently.
             raise ValueError("sample rates differ across chunks")
+        if chunk.samples.ndim != 1 or chunk.samples.dtype != self._dtype:
+            raise ValueError("sample dtypes or dimensions differ across chunks")
 
         path = self._chunk_path(index)
         unfinished = path.with_name(path.name + _UNFINISHED_SUFFIX)
@@ -200,7 +240,6 @@ class StagedChunks:
     # -- internals ---------------------------------------------------------
 
     def _prepare(self) -> None:
-        self._make_directory()
         manifest = self._read_manifest()
         if manifest is None or manifest.get("fingerprint") != self._fingerprint:
             if manifest is not None or self._chunk_path(0).exists():
@@ -214,8 +253,39 @@ class StagedChunks:
 
         rate = manifest.get("sample_rate")
         self._sample_rate = int(rate) if isinstance(rate, int) else None
+        dtype = manifest.get("dtype")
+        try:
+            manifest_dtype = np.dtype(dtype) if isinstance(dtype, str) else None
+        except TypeError:
+            manifest_dtype = None
+        if manifest_dtype is not None and manifest_dtype != self._expected_dtype:
+            log.warning(
+                "discarding staged chunks in %s: their sample dtype is not the "
+                "engine's sample dtype",
+                self._directory,
+            )
+            self._reset()
+            return
+        # Version 1 manifests written before dtype validation did not have this
+        # field. AudioChunk's contract has always been float32, so those chunks
+        # remain safely resumable as long as each file validates against it.
+        self._dtype = self._expected_dtype
+        if (
+            self._sample_rate is not None
+            and self._expected_sample_rate is not None
+            and self._sample_rate != self._expected_sample_rate
+        ):
+            log.warning(
+                "discarding staged chunks in %s: their sample rate is not the "
+                "engine's sample rate",
+                self._directory,
+            )
+            self._reset()
+            return
         self._completed = self._readable_prefix()
-        if self._completed and self._sample_rate is None:
+        if self._expected_chunks is not None:
+            self._completed = min(self._completed, self._expected_chunks)
+        if self._completed and (self._sample_rate is None or self._dtype is None):
             # The manifest records the rate before the first chunk is written, so
             # chunks without one mean a manifest we did not write. Nothing can be
             # concluded about the audio either, so none of it is reused.
@@ -243,10 +313,30 @@ class StagedChunks:
                 f"{self._directory}: {exc}"
             ) from exc
 
+    def _acquire_lock(self) -> None:
+        lock_path = self._directory / _LOCK_NAME
+        try:
+            handle = open(lock_path, "a+b")  # noqa: SIM115 - held for sink lifetime
+            _lock(handle)
+        except OSError as exc:
+            if "handle" in locals():
+                handle.close()
+            raise StagingUnavailableError(
+                f"synthesis staging directory {self._directory} is already in use"
+            ) from exc
+        self._lock_handle = handle
+
     def _reset(self) -> None:
-        discard_staged_chunks(self._directory)
+        for path in self._directory.iterdir():
+            if path.name == _LOCK_NAME:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                _remove(path)
         self._completed = 0
         self._sample_rate = None
+        self._dtype = self._expected_dtype
         self._make_directory()
         self._write_manifest()
 
@@ -258,7 +348,7 @@ class StagedChunks:
         after it worthless anyway, since audio must be joined in order.
         """
         count = 0
-        while _holds_samples(self._chunk_path(count)):
+        while _holds_samples(self._chunk_path(count), dtype=self._dtype):
             count += 1
         return count
 
@@ -290,6 +380,7 @@ class StagedChunks:
         payload = {
             "fingerprint": self._fingerprint,
             "sample_rate": self._sample_rate,
+            "dtype": self._dtype.str if self._dtype is not None else None,
             "version": _FORMAT_VERSION,
         }
         unfinished = self._manifest_path.with_name(MANIFEST_NAME + _UNFINISHED_SUFFIX)
@@ -358,8 +449,14 @@ def sweep_stale(
         touched = _last_touched(child)
         if touched is None or touched >= cutoff:
             continue
-        freed = _directory_size(child)
-        discard_staged_chunks(child)
+        sweep_lock = _try_lock(child)
+        if sweep_lock is None:
+            continue
+        try:
+            freed = _directory_size(child)
+            discard_staged_chunks(child)
+        finally:
+            sweep_lock.close()
         if child.exists():
             continue
         swept.append(child)
@@ -372,7 +469,7 @@ def sweep_stale(
     return swept
 
 
-def _holds_samples(path: Path) -> bool:
+def _holds_samples(path: Path, *, dtype: np.dtype | None = None) -> bool:
     """Whether path is a complete `.npy` file of one-dimensional samples.
 
     Memory-mapping reads the header and checks the file is long enough for the
@@ -383,7 +480,33 @@ def _holds_samples(path: Path) -> bool:
         samples = np.load(path, mmap_mode="r", allow_pickle=False)
     except (OSError, ValueError, EOFError):
         return False
-    return bool(getattr(samples, "ndim", 0) == 1)
+    return bool(
+        getattr(samples, "ndim", 0) == 1 and (dtype is None or samples.dtype == dtype)
+    )
+
+
+def _try_lock(directory: Path) -> BinaryIO | None:
+    """Hold and return a lock unless a synthesizer is using the directory."""
+    try:
+        handle = open(directory / _LOCK_NAME, "a+b")  # noqa: SIM115 - returned locked
+        _lock(handle)
+    except OSError:
+        if "handle" in locals():
+            handle.close()
+        return None
+    return handle
+
+
+def _lock(handle: BinaryIO) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+    handle.seek(0)
+    if not handle.read(1):
+        handle.write(b"\0")
+        handle.flush()
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
 
 
 def _chunk_index(path: Path) -> int | None:

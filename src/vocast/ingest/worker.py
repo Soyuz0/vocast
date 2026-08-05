@@ -196,6 +196,7 @@ class Worker:
                     error=error,
                 ),
             )
+            self._discard_resume(entry)
             self._entries.mark_failed(entry.id, error=error)
             return WorkOutcome(entry_id=entry.id, error=error)
 
@@ -229,8 +230,18 @@ class Worker:
                 error=error,
             ),
         )
+        self._discard_resume(entry)
         self._entries.mark_failed(entry.id, error=error)
         return WorkOutcome(entry_id=entry.id, error=error)
+
+    def _discard_resume(self, entry: Entry) -> None:
+        """Remove chunks only when the queue has permanently given up."""
+        try:
+            self._generator.discard_resume(f"entry-{entry.id}")
+        except Exception:
+            log.exception(
+                "could not discard synthesis staging %s", kv(entry_id=entry.id)
+            )
 
     def retry_delay(self, attempt: int) -> timedelta:
         """Exponential backoff, capped: base * 2^(attempt-1), max max_retry."""

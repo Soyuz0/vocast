@@ -412,8 +412,9 @@ class FreshRSSAPIAdapter:
             if isinstance(item.get("origin"), dict)
             else ""
         )
-        leads_elsewhere = bool(site) and not _same_site(site, article_url)
-        return body, leads_elsewhere
+        if not site:
+            return body, False
+        return body, not _same_site(site, article_url)
 
     def _post_url(self, item: dict[str, Any], article_url: str) -> str | None:
         """A link post's own page, when the body advertises one.
