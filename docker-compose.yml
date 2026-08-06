@@ -21,6 +21,16 @@ services:
       VOCAST_SERVER_PUBLIC_BASE_URL: ${VOCAST_PUBLIC_BASE_URL:-http://127.0.0.1:8000}
       # Required to use the write endpoints of /api/* from anywhere but here.
       VOCAST_ADMIN_TOKEN: ${VOCAST_ADMIN_TOKEN:-}
+      # Synthesis allocates and frees hundreds of megabytes per episode. Left to
+      # itself, glibc raises its mmap threshold after seeing large frees, so
+      # later large blocks come from the heap instead and are never returned to
+      # the kernel: resident memory then ratchets up to the largest episode ever
+      # encoded and stays there. Pinning the threshold keeps big allocations on
+      # mmap, which is always given back. Capping the arenas stops each worker
+      # thread accumulating a pool of its own.
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      MALLOC_TRIM_THRESHOLD_: "131072"
+      MALLOC_ARENA_MAX: "2"
       VOCAST_LOG_LEVEL: ${VOCAST_LOG_LEVEL:-INFO}
     # Synthesis is CPU-bound and will happily eat every core; cap it so the
     # rest of the host stays responsive. Tune or remove to taste.

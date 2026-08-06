@@ -75,6 +75,27 @@ def join_with_silence(
     return AudioChunk(joined, sample_rate)
 
 
+def _to_pcm16(samples: np.ndarray, block: int = 1 << 20) -> bytes:
+    """Convert float samples to 16-bit PCM bytes a block at a time.
+
+    The obvious spelling -- clip, scale, cast, then tobytes -- holds four
+    full-length copies at once. For a three-hour episode that is close to four
+    gigabytes, and it is the largest allocation the service makes; the resident
+    memory it leaves behind is what makes usage appear to climb over days.
+
+    Converting in blocks into one preallocated buffer keeps the extra memory at
+    one block. The arithmetic is unchanged, so the bytes are exactly what the
+    previous spelling produced and the encoded audio is identical.
+    """
+    pcm = np.empty(samples.shape, dtype=np.int16)
+    for start in range(0, samples.size, block):
+        window = samples[start : start + block]
+        scaled = np.clip(window, -1.0, 1.0)
+        np.multiply(scaled, 32767, out=scaled)
+        pcm[start : start + block] = scaled.astype(np.int16)
+    return pcm.tobytes()
+
+
 def write_audio(
     chunk: AudioChunk,
     path: Path,
@@ -87,10 +108,8 @@ def write_audio(
         sf.write(path, chunk.samples, chunk.sample_rate)
         return
     if suffix == ".mp3":
-        pcm = np.clip(chunk.samples, -1.0, 1.0)
-        pcm = (pcm * 32767).astype(np.int16)
         seg = AudioSegment(
-            pcm.tobytes(),
+            _to_pcm16(chunk.samples),
             frame_rate=chunk.sample_rate,
             sample_width=2,
             channels=1,
