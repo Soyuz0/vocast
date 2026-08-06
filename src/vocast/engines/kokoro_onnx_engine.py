@@ -73,6 +73,14 @@ class KokoroOnnxEngine(TTSEngine):
         voices = _ensure_file(directory, VOICES_FILE)
 
         options = onnxruntime.SessionOptions()
+        # ONNX Runtime's CPU arena keeps every block it has ever allocated, and
+        # an article is synthesized in chunks of varying length, so it grows
+        # without bound: measured here at roughly 55 MB per call, nearly a
+        # gigabyte across sixteen. Over hours that is what made resident memory
+        # climb until the process was killed. Allocating per request instead is
+        # flat -- the same measurement moves fifteen megabytes and stays there --
+        # and an arena buys little for a model run one chunk at a time.
+        options.enable_cpu_mem_arena = False
         # Honour the process-wide thread budget. Left to itself ONNX Runtime
         # takes every core, which with several workers oversubscribes the
         # machine exactly as the PyTorch engine used to.

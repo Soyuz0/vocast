@@ -132,3 +132,57 @@ def test_engine_returns_all_batches_joined():
 
     assert len(result.samples) == sum(len(b) for b in fake.batches)
     assert result.sample_rate == 24000
+
+
+def test_the_session_does_not_use_the_growing_cpu_arena():
+    """ONNX Runtime's arena retains every block it allocates, and chunks vary in
+    length, so it grew about 55 MB per call and never gave any of it back."""
+    captured = {}
+
+    class FakeSessionOptions:
+        def __init__(self):
+            self.enable_cpu_mem_arena = True
+            self.intra_op_num_threads = 0
+            self.inter_op_num_threads = 0
+
+    class FakeOnnx:
+        SessionOptions = FakeSessionOptions
+
+        @staticmethod
+        def InferenceSession(model, sess_options, providers):
+            captured["arena"] = sess_options.enable_cpu_mem_arena
+            return object()
+
+    class FakeKokoro:
+        @staticmethod
+        def from_session(session, voices):
+            return object()
+
+    import sys
+    import types
+
+    onnx_module = types.ModuleType("onnxruntime")
+    onnx_module.SessionOptions = FakeOnnx.SessionOptions
+    onnx_module.InferenceSession = FakeOnnx.InferenceSession
+    kokoro_module = types.ModuleType("kokoro_onnx")
+    kokoro_module.Kokoro = FakeKokoro
+    saved = {k: sys.modules.get(k) for k in ("onnxruntime", "kokoro_onnx")}
+    sys.modules["onnxruntime"] = onnx_module
+    sys.modules["kokoro_onnx"] = kokoro_module
+    try:
+        import vocast.engines.kokoro_onnx_engine as engine_module
+
+        original = engine_module._ensure_file
+        engine_module._ensure_file = lambda directory, name: directory / name
+        try:
+            KokoroOnnxEngine(model_dir="/tmp")
+        finally:
+            engine_module._ensure_file = original
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+    assert captured["arena"] is False
