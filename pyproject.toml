@@ -30,6 +30,7 @@ dependencies = [
     "trafilatura",
     "feedparser>=6.0",
     "PyYAML>=6.0",
+    "num2words>=0.5.14",
 ]
 
 [project.urls]

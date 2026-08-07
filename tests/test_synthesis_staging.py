@@ -514,8 +514,12 @@ def _assert_starts_over(tmp_path: Path, staged_from, then) -> None:
 
 def _chunk_count(passages, engine) -> int:
     from vocast.chunking import chunk_text
+    from vocast.text_normalization import normalize_for_speech
 
-    return sum(len(chunk_text(text, engine.max_chars)) for text, _ in passages)
+    return sum(
+        len(chunk_text(normalize_for_speech(text), engine.max_chars))
+        for text, _ in passages
+    )
 
 
 def _staged_chunk_files(directory: Path) -> int:

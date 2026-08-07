@@ -11,6 +11,7 @@ from .staging import (
     engine_fingerprint,
     narration_fingerprint,
 )
+from .text_normalization import normalize_for_speech
 
 
 class SynthesisCancelled(Exception):
@@ -80,7 +81,7 @@ def _chunk_plan(
         (chunk, voice)
         for text, voice in passages
         if text.strip()
-        for chunk in chunk_text(text, engine.max_chars)
+        for chunk in chunk_text(normalize_for_speech(text), engine.max_chars)
     ]
 
 
@@ -123,7 +124,7 @@ def synthesize_article(
     produced, and chunks are near-uniform in length, so the ratio tracks elapsed
     audio closely.
     """
-    chunks = chunk_text(text, engine.max_chars)
+    chunks = chunk_text(normalize_for_speech(text), engine.max_chars)
     if not chunks:
         raise ValueError("input text is empty")
 
