@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from vocast.audio import _to_pcm16
+from vocast.audio import _is_embeddable_image, _to_pcm16, write_audio
+from vocast.engines.engine import AudioChunk
 
 # --- pcm conversion ---------------------------------------------------------
 
@@ -40,3 +41,45 @@ def test_a_block_boundary_does_not_disturb_the_samples_around_it():
     assert len(pcm) == samples.size
     assert pcm[block - 1] == np.int16(np.clip(samples[block - 1], -1, 1) * 32767)
     assert pcm[block] == np.int16(np.clip(samples[block], -1, 1) * 32767)
+
+
+# --- cover art --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "magic", "embeddable"),
+    [
+        ("cover.jpg", b"\xff\xd8\xff\xe0", True),
+        ("cover.png", b"\x89PNG\r\n\x1a\n", True),
+        ("cover.ico", b"\x00\x00\x01\x00", False),
+        ("cover.gif", b"GIF89a", False),
+    ],
+)
+def test_only_formats_the_encoder_accepts_are_offered_to_it(
+    tmp_path, name, magic, embeddable
+):
+    """An ICO fails the export only after the encoder has written its temporary
+    files, so the episode loses its artwork and the files are left behind."""
+    path = tmp_path / name
+    path.write_bytes(magic + b"padding")
+
+    assert _is_embeddable_image(path) is embeddable
+
+
+def test_a_missing_or_empty_cover_is_not_offered(tmp_path):
+    assert _is_embeddable_image(tmp_path / "absent.png") is False
+    (tmp_path / "empty.png").write_bytes(b"")
+    assert _is_embeddable_image(tmp_path / "empty.png") is False
+
+
+def test_an_unembeddable_cover_still_produces_the_episode(tmp_path):
+    """Losing the artwork is acceptable; losing the episode is not."""
+    ico = tmp_path / "cover.ico"
+    ico.write_bytes(b"\x00\x00\x01\x00" + b"0" * 64)
+    out = tmp_path / "episode.mp3"
+
+    write_audio(
+        AudioChunk(np.zeros(2400, dtype=np.float32), 24000), out, cover_path=ico
+    )
+
+    assert out.exists() and out.stat().st_size > 0

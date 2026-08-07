@@ -3,6 +3,14 @@
 import json
 from pathlib import Path
 
+#: Real leading bytes: write_audio only offers a cover to the encoder when the
+#: file actually is a PNG or JPEG, because anything else fails the export.
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+JPEG_MAGIC = b"\xff\xd8\xff\xe0"
+
+
+import subprocess
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -109,7 +117,7 @@ def test_write_audio_forwards_cover(tmp_path, monkeypatch):
 
     monkeypatch.setattr(audio.AudioSegment, "export", mock_export)
     cover = tmp_path / "cover.png"
-    cover.write_bytes(b"image-bytes")
+    cover.write_bytes(PNG_MAGIC + b"image-bytes")
     write_audio(_chunk(), tmp_path / "audio.mp3", cover_path=cover)
     assert export_calls[-1].get("cover") == str(cover)
 
@@ -137,7 +145,7 @@ def test_write_audio_falls_back_when_embedding_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr(audio.AudioSegment, "export", mock_export)
     cover = tmp_path / "cover.png"
-    cover.write_bytes(b"image-bytes")
+    cover.write_bytes(PNG_MAGIC + b"image-bytes")
     audio_output = tmp_path / "audio.mp3"
     write_audio(_chunk(), audio_output, cover_path=cover)
     assert any("cover" in call for call in export_calls)
@@ -150,7 +158,7 @@ def test_write_audio_falls_back_when_embedding_fails(tmp_path, monkeypatch):
 
 def test_resolve_cover_uses_downloaded(tmp_path):
     downloaded = tmp_path / "cover.jpg"
-    downloaded.write_bytes(b"image-bytes")
+    downloaded.write_bytes(JPEG_MAGIC + b"image-bytes")
     with library._resolve_cover(downloaded) as cover_path:
         assert cover_path == downloaded
 
@@ -196,18 +204,53 @@ def test_backward_compatible_entry_without_cover_field():
 # --- feed icons as episode art --------------------------------------------
 
 
-def test_ico_cover_is_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """Feed icons are often ICO; rejecting them would fall back to the generic
-    cover for most publications."""
-    ico = b"\x00\x00\x01\x00" + b"\x00" * 60
+ICO = b"\x00\x00\x01\x00" + b"\x00" * 60
+
+
+def _serves_an_ico(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         library.urllib.request,
         "urlopen",
-        lambda *a, **k: _MockResponse("image/vnd.microsoft.icon", ico),
+        lambda *a, **k: _MockResponse("image/vnd.microsoft.icon", ICO),
     )
+
+
+def test_an_ico_cover_is_converted_to_png(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Feed icons are usually ICO, which the encoder will not embed. Converting
+    is what gets those publications any artwork at all."""
+    _serves_an_ico(monkeypatch)
+
+    def convert(command, **kwargs):
+        Path(command[-1]).write_bytes(PNG_MAGIC + b"converted")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(library.subprocess, "run", convert)
+
     path = library._download_cover("http://freshrss/f.php?h=x", tmp_path)
-    assert path is not None
-    assert path.suffix == ".ico"
+
+    assert path == tmp_path / "cover.png"
+    assert path.read_bytes().startswith(PNG_MAGIC)
+    assert not (tmp_path / "cover.ico").exists(), "the original is not kept"
+
+
+def test_an_ico_that_cannot_be_converted_yields_no_cover(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Better the generic cover than a file the encoder rejects: that failure
+    surfaces mid-export, after its temporary files have been written."""
+    _serves_an_ico(monkeypatch)
+    monkeypatch.setattr(
+        library.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 1),
+    )
+
+    path = library._download_cover("http://freshrss/f.php?h=x", tmp_path)
+
+    assert path is None
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_non_image_served_as_an_icon_is_still_rejected(

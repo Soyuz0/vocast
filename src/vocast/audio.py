@@ -75,6 +75,21 @@ def join_with_silence(
     return AudioChunk(joined, sample_rate)
 
 
+#: The encoder embeds these as ID3 artwork. Anything else -- an ICO feed icon,
+#: most often -- makes the export fail, and it fails only after the encoder has
+#: written its temporary files, so the episode loses its artwork and the files
+#: are left behind. Checking first is cheaper than discovering it mid-export.
+_EMBEDDABLE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")
+
+
+def _is_embeddable_image(path: Path | str) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(8).startswith(_EMBEDDABLE_MAGIC)
+    except OSError:
+        return False
+
+
 def _to_pcm16(samples: np.ndarray, block: int = 1 << 20) -> bytes:
     """Convert float samples to 16-bit PCM bytes a block at a time.
 
@@ -119,7 +134,7 @@ def write_audio(
         # artwork is a far better outcome than no episode. The failure is
         # logged rather than swallowed, because silently dropping art from
         # every episode would otherwise look like the feature never existed.
-        if cover_path is not None and Path(cover_path).exists():
+        if cover_path is not None and _is_embeddable_image(cover_path):
             try:
                 seg.export(
                     path, format="mp3", bitrate=mp3_bitrate, cover=str(cover_path)

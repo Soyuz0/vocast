@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -14,6 +15,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from importlib.resources import as_file, files
 from pathlib import Path
+
+import imageio_ffmpeg
 
 from .audio import write_audio
 from .engines import AudioChunk
@@ -109,8 +112,10 @@ def _download_cover(url: str, dest_dir: Path) -> Path | None:
     ext_by_type = {
         "image/jpeg": ".jpg",
         "image/png": ".png",
-        # Feed icons are often served as ICO; taggers handle it, and rejecting
-        # it would silently fall back to the generic cover.
+        # Feed icons are very often ICO. ffmpeg will not embed one as ID3
+        # artwork, so these are converted below rather than stored as-is: an
+        # ICO handed to the encoder fails the export, which cost every such
+        # episode its artwork and leaked the encoder's temporary files.
         "image/vnd.microsoft.icon": ".ico",
         "image/x-icon": ".ico",
     }
@@ -125,8 +130,37 @@ def _download_cover(url: str, dest_dir: Path) -> Path | None:
         return None
     if not data.startswith((_JPEG_MAGIC, _PNG_MAGIC, _ICO_MAGIC)):
         return None
+    if ext == ".ico":
+        return _ico_as_png(data, dest_dir)
     dest = dest_dir / f"cover{ext}"
     dest.write_bytes(data)
+    return dest
+
+
+def _ico_as_png(data: bytes, dest_dir: Path) -> Path | None:
+    """Rewrite an ICO as a PNG the encoder will accept, or give up on artwork.
+
+    Returning None falls back to the bundled cover, which is a better outcome
+    than handing the encoder something it will refuse: that failure is only
+    discovered mid-export, after its temporary files have been written.
+    """
+    source = dest_dir / "cover.ico"
+    dest = dest_dir / "cover.png"
+    source.write_bytes(data)
+    try:
+        result = subprocess.run(
+            [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-i", str(source), str(dest)],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        source.unlink(missing_ok=True)
+        return None
+    source.unlink(missing_ok=True)
+    if result.returncode != 0 or not dest.exists() or dest.stat().st_size == 0:
+        dest.unlink(missing_ok=True)
+        return None
     return dest
 
 
