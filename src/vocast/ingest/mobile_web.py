@@ -171,6 +171,9 @@ def register_mobile(router: APIRouter, state: ServiceState) -> None:
             base_path=base_path,
             title=_selection_title(service, origin_id, playlist, selected_status),
             page=result,
+            # Only a publication has a feed of its own to subscribe to, so the
+            # copy control appears for one and not for Library or Listen Later.
+            selected_origin_id=origin_id,
             active_filter=active_filter,
             filter_label=_FILTER_LABEL[active_filter],
             filters=[

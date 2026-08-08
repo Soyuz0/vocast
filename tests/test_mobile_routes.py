@@ -217,14 +217,15 @@ def test_sources_page_lists_both_destinations_and_every_publication(
     assert f"{ARTICLES_PAGE}?filter=unread&amp;origin_id=daily+news" in body
 
 
-def test_sources_page_offers_a_public_podcast_feed_for_each_publication(
+def test_the_subscription_link_is_built_by_the_server_not_the_browser(
     client: TestClient, context: AppContext
 ):
+    """The browser's own address is the private tailnet one, and the token must
+    not be rendered into the page, so the URL is asked for when it is wanted."""
     _add_entry(context, title="Space telescopes", origin="Science Weekly")
 
     body = client.get(SOURCES_PAGE).text
 
-    assert 'data-copy-feed data-origin-id="science weekly"' in body
     assert "'/api/feed-url?'" in body
     assert "location.origin" not in body
 
@@ -843,3 +844,51 @@ def test_the_article_list_carries_no_swipe_instructions(
 
     assert "Swipe" not in body
     assert "data-hint" not in body
+
+
+def test_the_publication_list_has_no_copy_control_in_its_rows(
+    client: TestClient, context: AppContext
+):
+    """A control in the row competes for the same tap as opening the row."""
+    _add_entry(context, title="An article", origin="Example Publication")
+
+    body = client.get(SOURCES_PAGE).text
+
+    assert 'type="button" data-copy-feed' not in body
+
+
+def test_a_publications_own_page_offers_its_feed(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="An article", origin="Example Publication")
+
+    body = client.get(f"{ARTICLES_PAGE}?origin_id=example+publication").text
+
+    assert 'type="button" data-copy-feed' in body
+    assert 'data-origin-id="example publication"' in body
+
+
+def test_library_and_listen_later_have_nothing_to_subscribe_to_here(
+    client: TestClient, context: AppContext
+):
+    """Those already have their own feeds elsewhere; this control is per
+    publication, and offering it without one would copy the wrong link."""
+    _add_entry(context, title="An article")
+
+    marker = 'type="button" data-copy-feed'
+    assert marker not in client.get(ARTICLES_PAGE).text
+    assert marker not in client.get(f"{ARTICLES_PAGE}?playlist=listen-later").text
+
+
+def test_copying_reports_through_a_transient_message_not_a_prompt(
+    client: TestClient, context: AppContext
+):
+    """A prompt has to be dismissed, and showing the URL to copy by hand would
+    put the token in the page, which fetching it on demand exists to avoid."""
+    _add_entry(context, title="An article", origin="Example Publication")
+
+    body = client.get(f"{ARTICLES_PAGE}?origin_id=example+publication").text
+
+    assert "window.prompt" not in body
+    assert "data-toast" in body
+    assert "Feed link copied" in body

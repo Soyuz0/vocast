@@ -81,9 +81,25 @@
 
 {% block navbelow %}
 {% if search_value %}<p class="subtitle">Results for &ldquo;{{ search_value }}&rdquo;</p>{% endif %}
+.subscribe{margin-bottom:18px}
+.subscribe .item{width:100%;background:none;border:0;font:inherit;color:var(--tint);
+  text-align:left;cursor:pointer}
+.subscribe .item:active{background:var(--bg-3)}
+.subscribe .item[disabled]{color:var(--text-grey)}
 {% endblock %}
 
 {% block content %}
+{% if selected_origin_id %}
+{# Subscribing belongs where you have already chosen the publication, rather
+   than as a second control on every row of the list that chooses it. #}
+<div class="card subscribe">
+  <button class="item" type="button" data-copy-feed
+          data-origin-id="{{ selected_origin_id }}" disabled>
+    <span class="glyph" aria-hidden="true">&#9758;</span>
+    <span class="label">Copy podcast feed link</span>
+  </button>
+</div>
+{% endif %}
 {% if page.items %}
 <ul class="rows" data-rows aria-label="{{ title }} articles">
   {% for item in page.items %}

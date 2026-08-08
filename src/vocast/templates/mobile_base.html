@@ -143,6 +143,13 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 {% block styles %}{% endblock %}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 76px);
+  transform:translate(-50%, 8px);z-index:40;pointer-events:none;max-width:78vw;
+  padding:10px 16px;border-radius:var(--radius-pill);text-align:center;
+  background:rgba(28,28,30,.94);color:#fff;font-size:14px;font-weight:500;
+  box-shadow:0 6px 20px rgba(0,0,0,.4);backdrop-filter:blur(12px);
+  opacity:0;transition:opacity 220ms ease, transform 220ms ease}
+.toast.shown{opacity:1;transform:translate(-50%, 0)}
 </style>
 </head>
 <body data-base-path="{{ base_path }}">
@@ -161,6 +168,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 </header>
 {% endblock %}
 {% block content %}{% endblock %}
+<div class="toast" data-toast role="status" aria-live="polite" hidden></div>
 
 <nav class="toolbar" aria-label="Library controls">
   <div class="bar">
@@ -249,25 +257,42 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   // Subscription links must use the configured public host, not the private
   // browser address. Fetching on tap also keeps the token out of the
   // server-rendered page.
-  Array.prototype.forEach.call(document.querySelectorAll('[data-copy-feed]'), function (button) {
-    button.addEventListener('click', async function () {
-      var original = button.textContent;
-      try {
-        var params = new URLSearchParams({ origin_id: button.dataset.originId });
-        var response = await fetch(
-          document.body.dataset.basePath + '/api/feed-url?' + params.toString(),
-          { credentials: 'same-origin' }
-        );
-        if (!response.ok) throw new Error('Could not get feed URL');
-        var url = (await response.json()).url;
-        try { await navigator.clipboard.writeText(url); button.textContent = 'Copied'; }
-        catch (_) { window.prompt('Podcast feed URL', url); }
-      } catch (error) {
-        button.textContent = 'Retry';
-      }
-      window.setTimeout(function () { button.textContent = original; }, 1600);
+    var toast = document.querySelector('[data-toast]');
+    var toastTimer = null;
+    function announce(message) {
+      if (!toast) return;
+      toast.textContent = message;
+      toast.hidden = false;
+      // Restart the fade rather than queue behind it: tapping twice should not
+      // leave the first message vanishing part way through the second.
+      window.clearTimeout(toastTimer);
+      toast.classList.add('shown');
+      toastTimer = window.setTimeout(function () {
+        toast.classList.remove('shown');
+      }, 2200);
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-copy-feed]'), function (button) {
+      button.disabled = false;
+      button.addEventListener('click', async function () {
+        button.disabled = true;
+        try {
+          var params = new URLSearchParams({ origin_id: button.dataset.originId });
+          var response = await fetch(
+            document.body.dataset.basePath + '/api/feed-url?' + params.toString(),
+            { credentials: 'same-origin' }
+          );
+          if (!response.ok) throw new Error('unavailable');
+          await navigator.clipboard.writeText((await response.json()).url);
+          announce('Feed link copied');
+        } catch (error) {
+          // Deliberately not offering the URL to copy by hand: that would put
+          // the token in the page, which fetching it on demand exists to avoid.
+          announce('Could not copy the link');
+        }
+        button.disabled = false;
+      });
     });
-  });
 })();
 </script>
 {% block scripts %}{% endblock %}
