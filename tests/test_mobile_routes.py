@@ -892,3 +892,17 @@ def test_copying_reports_through_a_transient_message_not_a_prompt(
     assert "window.prompt" not in body
     assert "data-toast" in body
     assert "Feed link copied" in body
+
+
+def test_no_stylesheet_text_escapes_into_the_page_body(
+    client: TestClient, context: AppContext
+):
+    """A style rule placed outside the styles block renders as visible text, and
+    looks like the page is broken rather than like a mistake in a template."""
+    _add_entry(context, title="An article", origin="Example Publication")
+
+    for path in (SOURCES_PAGE, f"{ARTICLES_PAGE}?origin_id=example+publication"):
+        body = client.get(path).text
+        after_styles = body.split("</style>")[-1]
+        assert "{margin" not in after_styles, path
+        assert "cursor:pointer" not in after_styles, path
