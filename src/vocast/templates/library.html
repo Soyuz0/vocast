@@ -66,6 +66,12 @@ input,button,select{font-family:inherit;font-size:inherit}
 .navlink[aria-current="page"] .count{color:var(--color-purple-light)}
 .chipbtn[aria-pressed="true"]{background:var(--bg-purple);color:var(--color-purple-light)}
 .chipbtn .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.publication-option{display:flex;align-items:center;gap:2px}
+.publication-option .chipbtn{min-width:0}
+.feedcopy{width:34px;height:34px;flex:none;border:0;border-radius:var(--radius-sm);
+  background:transparent;color:var(--color-text-link);cursor:pointer;font-family:var(--font-mono);
+  font-size:11px}
+.feedcopy:hover{background:var(--bg-3)}
 .side .grow{flex:1}
 .ghost{border:1px solid var(--stroke-bold);background:transparent;color:var(--text-white);
   border-radius:var(--radius-sm);padding:9px var(--space-3);cursor:pointer;font-size:14px;
@@ -326,17 +332,24 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
       <h2>Publications</h2>
       <div class="facet">
         {% for origin in facets.origins %}
-        <a class="chipbtn" href="{{ link(origin_id=(None if q.origin_id == origin.id else origin.id), page=None) }}"
-           aria-pressed="{{ 'true' if q.origin_id == origin.id else 'false' }}" title="{{ origin.name }}">
-          <span class="label">{{ origin.name }}</span><span class="count">{{ origin.count }}</span>
-        </a>
+        <div class="publication-option">
+          <a class="chipbtn" href="{{ link(origin_id=(None if q.origin_id == origin.id else origin.id), page=None) }}"
+             aria-pressed="{{ 'true' if q.origin_id == origin.id else 'false' }}" title="{{ origin.name }}">
+            <span class="label">{{ origin.name }}</span><span class="count">{{ origin.count }}</span>
+          </a>
+          <button class="feedcopy" type="button" data-copy-feed data-origin-id="{{ origin.id }}"
+                  aria-label="Copy {{ origin.name }} podcast feed URL" title="Copy podcast feed URL">RSS</button>
+        </div>
         {% endfor %}
       </div>
     </div>
 
     <div class="grow"></div>
 
-    <button class="ghost" type="button" data-copy-feed>Copy feed URL</button>
+    <button class="ghost" type="button" data-copy-feed
+            {% if q.origin_id %}data-origin-id="{{ q.origin_id }}"{% elif q.queued == 'yes' %}data-feed="listen-later"{% endif %}>
+      Copy {{ 'publication ' if q.origin_id else '' }}feed URL
+    </button>
   </aside>
 
   <main data-base-path="{{ base_path }}">
@@ -345,7 +358,9 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
       <b>{{ 'Listen Later' if q.queued == 'yes' else 'Library' }}</b>
       <span class="count">{{ facets.queued if q.queued == 'yes' else facets.total }}</span>
       <button class="iconbtn" type="button" data-refresh aria-label="Refresh">&#8635;</button>
-      <button class="iconbtn" type="button" data-copy-feed aria-label="Copy feed URL">&#128203;</button>
+      <button class="iconbtn" type="button" data-copy-feed
+              {% if q.origin_id %}data-origin-id="{{ q.origin_id }}"{% elif q.queued == 'yes' %}data-feed="listen-later"{% endif %}
+              aria-label="Copy {{ 'publication ' if q.origin_id else '' }}feed URL">&#128203;</button>
     </div>
 
     <form class="toolbar" method="get" action="{{ base_path }}/library">
@@ -639,19 +654,26 @@ select.ghost{appearance:none;padding-right:var(--space-4)}
     play(buttons[0].dataset.episode, buttons[0].dataset.title);
   });
 
-  // ---- feed URL. Deliberately without the feed token: this page is
-  // unauthenticated on the tailnet, so embedding the token would hand the
-  // public feed's secret to anyone who can reach the library. The copied URL
-  // works as-is over the tailnet, and an internet subscription needs the token
-  // added by hand.
+  // ---- feed URL. Ask for it only when clicked so the private token never
+  // appears in the page source. The server uses public_base_url rather than
+  // the browser's address, which may be this machine's private tailnet host.
   Array.prototype.forEach.call(document.querySelectorAll('[data-copy-feed]'), function (button) {
     button.addEventListener('click', async function () {
-      var url = location.origin + basePath + '/feeds/'
-        + (new URLSearchParams(location.search).get('queued') === 'yes' ? 'listen-later' : 'all')
-        + '.xml';
       var original = button.textContent;
-      try { await navigator.clipboard.writeText(url); button.textContent = 'Copied'; }
-      catch (_) { window.prompt('Feed URL', url); }
+      try {
+        var params = new URLSearchParams();
+        if (button.dataset.originId) params.set('origin_id', button.dataset.originId);
+        else params.set('feed', button.dataset.feed || 'all');
+        var response = await fetch(basePath + '/api/feed-url?' + params.toString(), {
+          credentials: 'same-origin'
+        });
+        if (!response.ok) throw new Error('Could not get feed URL');
+        var url = (await response.json()).url;
+        try { await navigator.clipboard.writeText(url); button.textContent = 'Copied'; }
+        catch (_) { window.prompt('Feed URL', url); }
+      } catch (error) {
+        button.textContent = 'Try again';
+      }
       setTimeout(function () { button.textContent = original; }, 1600);
     });
   });

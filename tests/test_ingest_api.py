@@ -106,6 +106,83 @@ def test_unknown_source_feed_is_404(client: TestClient):
     assert client.get("/feeds/source/999.xml").status_code == 404
 
 
+def test_publication_feed_contains_only_that_publications_episodes(
+    client: TestClient, context: AppContext
+):
+    source = context.sources.add(
+        name="Reading List", kind="rss", url="https://example.com/reading-list.xml"
+    )
+    for title, publication in (
+        ("Space telescopes", "Science / Weekly"),
+        ("Election results", "Daily News"),
+    ):
+        entry = context.entries.insert_if_new(
+            FeedEntry(
+                source_id=source.id,
+                external_guid=title,
+                title=title,
+                article_url=f"https://example.com/{title}",
+                published_at=utcnow(),
+                origin_name=publication,
+            )
+        )
+        context.entries.mark_ready(
+            entry.id,
+            episode_id=f"episode-{entry.id}",
+            duration_seconds=60,
+            audio_bytes=100,
+        )
+
+    response = client.get(
+        "/feeds/publication.xml", params={"origin_id": "science / weekly"}
+    )
+
+    assert response.status_code == 200
+    assert "Vocast - Science / Weekly" in response.text
+    assert "Space telescopes" in response.text
+    assert "Election results" not in response.text
+
+
+def test_unknown_publication_feed_is_404(client: TestClient):
+    assert (
+        client.get("/feeds/publication.xml", params={"origin_id": "unknown"}).status_code
+        == 404
+    )
+
+
+def test_feed_url_api_returns_complete_configured_public_publication_url(
+    client: TestClient, context: AppContext
+):
+    source = context.sources.add(
+        name="Reading List", kind="rss", url="https://example.com/reading-list.xml"
+    )
+    context.entries.insert_if_new(
+        FeedEntry(
+            source_id=source.id,
+            external_guid="science",
+            title="Science",
+            article_url="https://example.com/science",
+            published_at=utcnow(),
+            origin_name="Science / Weekly",
+        )
+    )
+    context.config = replace(
+        context.config,
+        server=replace(context.config.server, feed_token="feed-secret"),
+    )
+
+    response = client.get("/api/feed-url", params={"origin_id": "SCIENCE / WEEKLY"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "url": (
+            "https://podcast.example.com/feeds/publication.xml?"
+            "origin_id=science%20%2F%20weekly&token=feed-secret"
+        )
+    }
+    assert response.headers["cache-control"] == "no-store"
+
+
 def test_configured_public_base_url_is_used_for_enclosures(
     client: TestClient, context: AppContext
 ):

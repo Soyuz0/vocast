@@ -30,6 +30,8 @@ _ENTRY_COLUMNS = """
     next_retry_at, claimed_at, error_message, created_at, updated_at
 """
 
+_PUBLICATION_EXPRESSION = "COALESCE(NULLIF(TRIM(e.origin_name), ''), s.name)"
+
 
 class DuplicateSourceError(ValueError):
     """Raised when adding a source whose kind+url already exists."""
@@ -584,6 +586,7 @@ class EntryRepository:
         self,
         *,
         source_id: int | None = None,
+        origin_id: str | None = None,
         limit: int | None = None,
         hide_read_before: datetime | None = None,
     ) -> list[PublishedEpisode]:
@@ -611,6 +614,9 @@ class EntryRepository:
         if source_id is not None:
             clauses.append("e.source_id = ?")
             params.append(source_id)
+        if origin_id is not None:
+            clauses.append(f"UNICODE_CASEFOLD(TRIM({_PUBLICATION_EXPRESSION})) = ?")
+            params.append(origin_id.casefold())
         if hide_read_before is not None:
             # Downloaded long enough ago to assume it has been heard. The audio
             # stays on disk; it just stops being advertised.
@@ -794,6 +800,25 @@ class EntryRepository:
                     else:
                         marked += cur.rowcount
         return marked, cleared
+
+    def publication_name(self, origin_id: str) -> str | None:
+        """The display name for a publication id, or None if nothing matches.
+
+        Deliberately not derived from the facet list: that groups every entry in
+        the library to build all eighty-odd publications, which is 27ms of work
+        on this database to answer a question about one of them, and it runs on
+        every request for a publication feed.
+        """
+        with self._db.reading() as conn:
+            row = conn.execute(
+                f"""
+                SELECT MIN({_PUBLICATION_EXPRESSION}) AS name
+                FROM entries e JOIN sources s ON s.id = e.source_id
+                WHERE UNICODE_CASEFOLD(TRIM({_PUBLICATION_EXPRESSION})) = ?
+                """,
+                (origin_id.casefold(),),
+            ).fetchone()
+        return row["name"] if row and row["name"] else None
 
     def tracked_episode_ids(self) -> set[str]:
         """Every episode id this database knows about, whatever its state.

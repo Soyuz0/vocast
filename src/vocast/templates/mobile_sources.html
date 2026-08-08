@@ -13,6 +13,13 @@
 .status-dot.ignored,.status-dot.expired{background:var(--text-dark-grey)}
 @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
 .item .glyph.dotcell{display:flex;align-items:center;justify-content:center}
+.publication-row{position:relative;display:flex;align-items:stretch}
+.publication-row + .publication-row::before{content:"";position:absolute;left:48px;right:0;top:0;
+  height:1px;background:var(--hairline);z-index:1}
+.publication-row .item{flex:1;min-width:0}
+.publication-row .feedcopy{width:54px;flex:none;color:var(--tint);font-size:12px;font-weight:600;
+  letter-spacing:.02em}
+.publication-row .feedcopy:active{background:var(--bg-3)}
 {% endblock %}
 
 {% block content %}
@@ -54,12 +61,16 @@
   {% if publications %}
   <div class="card">
     {% for publication in publications %}
-    <a class="item" href="{{ destination(origin_id=publication.id) }}">
-      <span class="glyph" aria-hidden="true">&#9679;</span>
-      <span class="label">{{ publication.name }}</span>
-      <span class="n">{{ publication.count }}</span>
-      <span class="disclosure" aria-hidden="true"></span>
-    </a>
+    <div class="publication-row">
+      <a class="item" href="{{ destination(origin_id=publication.id) }}">
+        <span class="glyph" aria-hidden="true">&#9679;</span>
+        <span class="label">{{ publication.name }}</span>
+        <span class="n">{{ publication.count }}</span>
+        <span class="disclosure" aria-hidden="true"></span>
+      </a>
+      <button class="feedcopy" type="button" data-copy-feed data-origin-id="{{ publication.id }}"
+              aria-label="Copy {{ publication.name }} podcast feed URL">RSS</button>
+    </div>
     {% endfor %}
   </div>
   {% else %}

@@ -217,6 +217,18 @@ def test_sources_page_lists_both_destinations_and_every_publication(
     assert f"{ARTICLES_PAGE}?filter=unread&amp;origin_id=daily+news" in body
 
 
+def test_sources_page_offers_a_public_podcast_feed_for_each_publication(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, title="Space telescopes", origin="Science Weekly")
+
+    body = client.get(SOURCES_PAGE).text
+
+    assert 'data-copy-feed data-origin-id="science weekly"' in body
+    assert "'/api/feed-url?'" in body
+    assert "location.origin" not in body
+
+
 @pytest.mark.parametrize("path", [SOURCES_PAGE, ARTICLES_PAGE])
 def test_refresh_is_reachable_from_both_pages_and_reloads_without_javascript(
     client: TestClient, context: AppContext, path: str

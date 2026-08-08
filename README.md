@@ -459,6 +459,7 @@ enclosures use the public host too.
 | `/feeds/all.xml` | Everything. Identical to `/feed.xml`. |
 | `/feeds/recent.xml` | The newest `server.recent_feed_items` episodes still unheard (default 100). |
 | `/feeds/source/<id>.xml` | One source only, as its own show. |
+| `/feeds/publication.xml?origin_id=<id>` | One publication only, across ingestion sources. Copy its complete public URL from the web or mobile library. |
 | `/feeds/listen-later.xml` | Only ready episodes selected in the web library. |
 
 `/feeds/recent.xml` exists because a podcast client re-parses every item on each

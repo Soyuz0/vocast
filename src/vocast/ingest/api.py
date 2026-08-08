@@ -273,6 +273,22 @@ def _register_feeds(router: APIRouter, state: ServiceState) -> None:
             state, request, source_id=source_id, source_name=source.name
         )
 
+    @router.api_route("/feeds/publication.xml", methods=["GET", "HEAD"])
+    def publication_feed(
+        origin_id: str, request: Request, token: str | None = None
+    ) -> Response:
+        state.require_feed_token(request, token)
+        name = _publication_name(state, origin_id)
+        if name is None:
+            return PlainTextResponse("unknown publication", status_code=404)
+        return _render_feed(
+            state,
+            request,
+            source_id=None,
+            origin_id=origin_id,
+            source_name=name,
+        )
+
     @router.api_route("/feeds/listen-later.xml", methods=["GET", "HEAD"])
     def listen_later_feed(request: Request, token: str | None = None) -> Response:
         state.require_feed_token(request, token)
@@ -315,6 +331,7 @@ def _render_feed(
     request: Request,
     *,
     source_id: int | None,
+    origin_id: str | None = None,
     source_name: str | None = None,
     title: str | None = None,
     description: str | None = None,
@@ -325,6 +342,7 @@ def _render_feed(
         state.context.entries,
         base_url=base,
         source_id=source_id,
+        origin_id=origin_id,
         audio_base_url=state.audio_base_url(request),
         token=state.feed_token,
         max_items=(
@@ -350,6 +368,11 @@ def _render_feed(
         episodes,
     )
     return Response(content=xml, media_type=RSS_MEDIA_TYPE)
+
+
+def _publication_name(state: ServiceState, origin_id: str) -> str | None:
+    """The publication's display name, or None when no entry belongs to it."""
+    return state.context.entries.publication_name(origin_id)
 
 
 # --- health ----------------------------------------------------------------
@@ -404,6 +427,33 @@ def _paused(state: ServiceState) -> bool:
 
 def _register_admin(router: APIRouter, state: ServiceState) -> None:
     require_admin = _admin_guard(state)
+
+    @router.get("/api/feed-url")
+    def feed_url(
+        request: Request,
+        feed: str = "all",
+        origin_id: str | None = None,
+    ) -> JSONResponse:
+        """Return a complete public subscription URL on an explicit UI action.
+
+        The feed token stays out of server-rendered pages, but the copied URL is
+        immediately usable outside the tailnet. This endpoint itself remains on
+        the private surface under the app-wide public guard.
+        """
+        if origin_id is not None:
+            if _publication_name(state, origin_id) is None:
+                raise HTTPException(404, "unknown publication")
+            encoded = urllib.parse.quote(origin_id.casefold(), safe="")
+            path = f"/feeds/publication.xml?origin_id={encoded}"
+        elif feed in {"all", "listen-later", "recent"}:
+            path = f"/feeds/{feed}.xml"
+        else:
+            raise HTTPException(400, "unknown feed")
+        url = with_token(f"{state.base_url(request)}{path}", state.feed_token)
+        return JSONResponse(
+            {"url": url},
+            headers={"Cache-Control": "no-store"},
+        )
 
     @router.post("/api/worker/pause", dependencies=[Depends(require_admin)])
     def pause_worker() -> JSONResponse:

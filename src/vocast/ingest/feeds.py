@@ -67,6 +67,7 @@ def collect_episodes(
     *,
     base_url: str,
     source_id: int | None = None,
+    origin_id: str | None = None,
     audio_base_url: str | None = None,
     token: str | None = None,
     max_items: int | None = None,
@@ -85,6 +86,7 @@ def collect_episodes(
     provenance = _provenance_by_episode(
         entries,
         source_id=source_id,
+        origin_id=origin_id,
         limit=max_items,
         hide_read_before=hide_read_before,
     )
@@ -106,7 +108,7 @@ def collect_episodes(
             continue
         episodes.append(_to_feed_episode(entry, details, audio_base, token=token))
 
-    if source_id is None:
+    if source_id is None and origin_id is None:
         # Episodes added by hand have no database row, so they still need a
         # library scan -- bounded by the same cap. Excluded ids come from every
         # tracked episode, not just the ones published above: one filtered out
@@ -163,6 +165,7 @@ def _provenance_by_episode(
     entries: EntryRepository | None,
     *,
     source_id: int | None,
+    origin_id: str | None,
     limit: int | None,
     hide_read_before: datetime | None = None,
 ) -> list[PublishedEpisode]:
@@ -170,6 +173,7 @@ def _provenance_by_episode(
         return []
     return entries.published_episodes(
         source_id=source_id,
+        origin_id=origin_id,
         limit=limit,
         hide_read_before=hide_read_before,
     )

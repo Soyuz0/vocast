@@ -245,6 +245,29 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
     }
     location.reload();
   });
+
+  // Subscription links must use the configured public host, not the private
+  // browser address. Fetching on tap also keeps the token out of the
+  // server-rendered page.
+  Array.prototype.forEach.call(document.querySelectorAll('[data-copy-feed]'), function (button) {
+    button.addEventListener('click', async function () {
+      var original = button.textContent;
+      try {
+        var params = new URLSearchParams({ origin_id: button.dataset.originId });
+        var response = await fetch(
+          document.body.dataset.basePath + '/api/feed-url?' + params.toString(),
+          { credentials: 'same-origin' }
+        );
+        if (!response.ok) throw new Error('Could not get feed URL');
+        var url = (await response.json()).url;
+        try { await navigator.clipboard.writeText(url); button.textContent = 'Copied'; }
+        catch (_) { window.prompt('Podcast feed URL', url); }
+      } catch (error) {
+        button.textContent = 'Retry';
+      }
+      window.setTimeout(function () { button.textContent = original; }, 1600);
+    });
+  });
 })();
 </script>
 {% block scripts %}{% endblock %}

@@ -258,6 +258,19 @@ def test_private_feed_links_explain_token_without_exposing_it(
     assert "private-feed-secret" not in body
 
 
+def test_library_publication_feed_controls_use_the_private_link_api(
+    client: TestClient, context: AppContext
+):
+    _add_entry(context, origin="Science Weekly")
+
+    body = client.get("/library?origin_id=science%20weekly").text
+
+    assert 'data-origin-id="science weekly"' in body
+    assert "'/api/feed-url?'" in body
+    assert "location.origin" not in body
+    assert "http://100." not in body
+
+
 def test_public_library_requires_feed_token_and_exchanges_it_for_a_cookie(
     client: TestClient, context: AppContext
 ):
@@ -386,7 +399,9 @@ def test_login_cookie_is_secure_behind_a_tls_proxy(
 # --- the public surface as a whole -----------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/", "/library", "/m", "/api/health"])
+@pytest.mark.parametrize(
+    "path", ["/", "/library", "/m", "/api/health", "/api/feed-url"]
+)
 def test_anything_but_the_podcast_is_absent_from_the_internet(
     client: TestClient, context: AppContext, path: str
 ):
@@ -401,7 +416,14 @@ def test_anything_but_the_podcast_is_absent_from_the_internet(
 
 
 @pytest.mark.parametrize(
-    "path", ["/feeds/all.xml", "/feed.xml", "/feeds/recent.xml", "/cover.jpg"]
+    "path",
+    [
+        "/feeds/all.xml",
+        "/feed.xml",
+        "/feeds/recent.xml",
+        "/feeds/publication.xml?origin_id=example+publication",
+        "/cover.jpg",
+    ],
 )
 def test_the_podcast_itself_is_published_but_needs_the_token(
     client: TestClient, context: AppContext, path: str
@@ -413,8 +435,13 @@ def test_the_podcast_itself_is_published_but_needs_the_token(
         server=replace(context.config.server, feed_token="feed-secret"),
     )
 
+    separator = "&" if "?" in path else "?"
+
     assert client.get(path, headers=FUNNEL).status_code == 401
-    assert client.get(f"{path}?token=feed-secret", headers=FUNNEL).status_code != 401
+    assert (
+        client.get(f"{path}{separator}token=feed-secret", headers=FUNNEL).status_code
+        != 401
+    )
 
 
 @pytest.mark.parametrize("path", ["/", "/library", "/api/health"])
