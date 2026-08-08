@@ -448,11 +448,14 @@ class VocastEpisodeGenerator:
         """
         document = f"<html><body>{content_html}</body></html>"
         try:
+            # Balanced mode can discard low-confidence blocks inside an otherwise
+            # long post. Recall keeps them; the explicit exclusions still bound it.
             extracted = trafilatura.extract(
                 document,
                 include_comments=False,
                 include_tables=False,
                 prune_xpath=["//pre"],
+                favor_recall=True,
             )
             # A second pass, because the plain output drops the quote elements
             # and rebuilding the text from the structured one would change it.
@@ -463,6 +466,7 @@ class VocastEpisodeGenerator:
                     include_comments=False,
                     include_tables=False,
                     prune_xpath=["//pre"],
+                    favor_recall=True,
                 )
             )
         except Exception as exc:

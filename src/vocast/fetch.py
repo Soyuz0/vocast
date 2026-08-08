@@ -75,6 +75,8 @@ def fetch_article_parts(
     """
     html = (html_fetcher or _fetch_html)(url)
 
+    # Balanced mode can discard low-confidence blocks inside an otherwise long
+    # article. Recall keeps those blocks; the explicit exclusions still bound it.
     result = trafilatura.extract(
         html,
         output_format="json",
@@ -82,6 +84,7 @@ def fetch_article_parts(
         include_comments=False,
         include_tables=False,
         prune_xpath=["//pre"],
+        favor_recall=True,
     )
     if result is None:
         raise ValueError(f"could not extract content from {url}")
@@ -103,6 +106,7 @@ def fetch_article_parts(
             include_comments=False,
             include_tables=False,
             prune_xpath=["//pre"],
+            favor_recall=True,
         )
     )
     return title, text, cover_image_url, quotes

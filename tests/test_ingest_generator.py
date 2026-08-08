@@ -577,6 +577,25 @@ def test_replacement_refuses_an_unsafe_id(lib: Path, engine: FakeEngine):
 # --- narrating a post body -------------------------------------------------
 
 
+def test_post_body_and_quote_extraction_favor_recall(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls = []
+
+    def extract(document, **options):
+        calls.append(options)
+        if options.get("output_format") == "xml":
+            return "<doc><main /></doc>"
+        return ARTICLE_TEXT
+
+    monkeypatch.setattr(generator_module.trafilatura, "extract", extract)
+
+    VocastEpisodeGenerator()._from_html("<p>body</p>", "https://example.com/post")
+
+    assert len(calls) == 2
+    assert all(call["favor_recall"] is True for call in calls)
+
+
 def test_post_body_is_narrated_without_fetching_the_link(
     lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
 ):

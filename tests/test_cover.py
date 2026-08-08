@@ -53,6 +53,23 @@ def test_fetch_cover_none_when_absent(monkeypatch: pytest.MonkeyPatch):
     assert cover is None
 
 
+def test_article_and_quote_extraction_favor_recall(monkeypatch: pytest.MonkeyPatch):
+    calls = []
+
+    def extract(html, **options):
+        calls.append(options)
+        if options.get("output_format") == "json":
+            return json.dumps({"title": "T", "text": "body"})
+        return "<doc><main /></doc>"
+
+    monkeypatch.setattr(fetch.trafilatura, "extract", extract)
+
+    fetch.fetch_article_parts("http://x", html_fetcher=lambda url: "<html></html>")
+
+    assert len(calls) == 2
+    assert all(call["favor_recall"] is True for call in calls)
+
+
 # --- _download_cover: accept only genuine JPEG/PNG ------------------------
 
 
