@@ -786,3 +786,16 @@ def test_the_dedicated_play_button_still_starts_playback(
     body = client.get("/library").text
 
     assert 'class="play" type="button" data-play' in body
+
+
+def test_desktop_copying_works_without_a_secure_context(
+    client: TestClient, context: AppContext
+):
+    """Served over plain HTTP on the tailnet, navigator.clipboard is absent, and
+    the prompt that used to cover for it now carries the feed token."""
+    _add_entry(context)
+    body = client.get("/library").text
+
+    assert "isSecureContext" in body
+    assert "execCommand('copy')" in body
+    assert "window.prompt" not in body

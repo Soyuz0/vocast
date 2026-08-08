@@ -257,6 +257,33 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   // Subscription links must use the configured public host, not the private
   // browser address. Fetching on tap also keeps the token out of the
   // server-rendered page.
+  // Copying without the clipboard API, which browsers withhold outside a secure
+    // context -- and the tailnet serves this over plain HTTP, so it is absent
+    // exactly where the page is normally used. The textarea is off-screen and
+    // removed immediately, so the token is never shown; offering it to be copied
+    // by hand is what fetching it on demand exists to avoid.
+    async function copyText(text) {
+      if (window.isSecureContext && navigator.clipboard) {
+        try { await navigator.clipboard.writeText(text); return true; } catch (_) { /* fall through */ }
+      }
+      var field = document.createElement('textarea');
+      field.value = text;
+      field.readOnly = true;
+      field.style.position = 'fixed';
+      field.style.top = '-1000px';
+      field.style.opacity = '0';
+      document.body.appendChild(field);
+      var selection = document.getSelection();
+      var restore = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+      field.focus();
+      field.setSelectionRange(0, text.length);
+      var copied = false;
+      try { copied = document.execCommand('copy'); } catch (_) { copied = false; }
+      field.remove();
+      if (restore && selection) { selection.removeAllRanges(); selection.addRange(restore); }
+      return copied;
+    }
+
     var toast = document.querySelector('[data-toast]');
     var toastTimer = null;
     function announce(message) {
@@ -283,7 +310,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
             { credentials: 'same-origin' }
           );
           if (!response.ok) throw new Error('unavailable');
-          await navigator.clipboard.writeText((await response.json()).url);
+          if (!await copyText((await response.json()).url)) throw new Error('clipboard');
           announce('Feed link copied');
         } catch (error) {
           // Deliberately not offering the URL to copy by hand: that would put

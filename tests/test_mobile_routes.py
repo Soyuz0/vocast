@@ -906,3 +906,29 @@ def test_no_stylesheet_text_escapes_into_the_page_body(
         after_styles = body.split("</style>")[-1]
         assert "{margin" not in after_styles, path
         assert "cursor:pointer" not in after_styles, path
+
+
+def test_copying_works_without_a_secure_context(
+    client: TestClient, context: AppContext
+):
+    """The tailnet serves this over plain HTTP, where browsers withhold
+    navigator.clipboard entirely, so relying on it alone fails every time."""
+    _add_entry(context, title="An article", origin="Example Publication")
+
+    body = client.get(f"{ARTICLES_PAGE}?origin_id=example+publication").text
+
+    assert "isSecureContext" in body, "the API is only used where it exists"
+    assert "execCommand('copy')" in body, "and there is a fallback where it does not"
+
+
+def test_the_feed_url_is_never_shown_to_be_copied_by_hand(
+    client: TestClient, context: AppContext
+):
+    """Displaying it would put the token on screen, which is the whole reason the
+    URL is fetched on demand rather than rendered into the page."""
+    _add_entry(context, title="An article", origin="Example Publication")
+
+    body = client.get(f"{ARTICLES_PAGE}?origin_id=example+publication").text
+
+    assert "window.prompt" not in body
+    assert "window.alert" not in body
