@@ -596,6 +596,31 @@ def test_post_body_and_quote_extraction_favor_recall(
     assert all(call["favor_recall"] is True for call in calls)
 
 
+def test_post_body_uses_repaired_bare_prose_when_it_recovers_more(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    prose = "Visible article prose without its paragraph wrapper. " * 20
+    body = f"<h2>Heading</h2>{prose}<blockquote>Quoted text.</blockquote>"
+    structured_inputs = []
+
+    def extract(document, **options):
+        repaired = f"<p>{prose}" in document
+        if options.get("output_format") == "xml":
+            structured_inputs.append(document)
+            return "<doc><main><quote>Quoted text.</quote></main></doc>"
+        return prose if repaired else ARTICLE_TEXT[:MIN_ARTICLE_CHARS]
+
+    monkeypatch.setattr(generator_module.trafilatura, "extract", extract)
+
+    _, text, _, quotes = VocastEpisodeGenerator()._from_html(
+        body, "https://example.com/post"
+    )
+
+    assert text == prose.strip()
+    assert quotes == ["Quoted text."]
+    assert f"<p>{prose}" in structured_inputs[0]
+
+
 def test_post_body_is_narrated_without_fetching_the_link(
     lib: Path, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
 ):

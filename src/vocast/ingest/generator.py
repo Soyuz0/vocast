@@ -19,7 +19,7 @@ import trafilatura
 
 from .. import library
 from ..engines import AudioChunk, TTSEngine, get_engine
-from ..fetch import fetch_article_parts
+from ..fetch import fetch_article_parts, repair_orphaned_text_blocks
 from ..pipeline import SynthesisCancelled, synthesize_passages
 from ..quotes import quotes_from_xml, split_quoted
 from ..staging import discard_staged_chunks
@@ -447,6 +447,7 @@ class VocastEpisodeGenerator:
         code blocks stripped, boilerplate dropped, paragraphs preserved.
         """
         document = f"<html><body>{content_html}</body></html>"
+        repaired_document = repair_orphaned_text_blocks(document)
         try:
             # Balanced mode can discard low-confidence blocks inside an otherwise
             # long post. Recall keeps them; the explicit exclusions still bound it.
@@ -457,11 +458,23 @@ class VocastEpisodeGenerator:
                 prune_xpath=["//pre"],
                 favor_recall=True,
             )
+            selected_document = document
+            if repaired_document != document:
+                repaired = trafilatura.extract(
+                    repaired_document,
+                    include_comments=False,
+                    include_tables=False,
+                    prune_xpath=["//pre"],
+                    favor_recall=True,
+                )
+                if len(repaired or "") > len(extracted or ""):
+                    extracted = repaired
+                    selected_document = repaired_document
             # A second pass, because the plain output drops the quote elements
             # and rebuilding the text from the structured one would change it.
             quotes = quotes_from_xml(
                 trafilatura.extract(
-                    document,
+                    selected_document,
                     output_format="xml",
                     include_comments=False,
                     include_tables=False,
