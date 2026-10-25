@@ -23,6 +23,7 @@ def test_defaults_apply_without_a_config_file(tmp_path: Path):
     assert config.server.host == "127.0.0.1"
     assert config.server.port == 8080
     assert config.worker.concurrency == 1
+    assert config.worker.model_idle_seconds == 300
     assert config.polling.default_interval_minutes == 15
     assert config.retention.enabled is False
 
@@ -40,6 +41,7 @@ def test_missing_vocast_config_env_target_is_an_error(tmp_path: Path):
 def test_empty_config_file_is_accepted(tmp_path: Path):
     config = load_config(_write(tmp_path, ""), env={})
     assert config.server.port == 8080
+    assert config.worker.model_idle_seconds == 300
 
 
 # --- file parsing ----------------------------------------------------------
@@ -159,6 +161,36 @@ def test_unlimited_retention_count_becomes_none(tmp_path: Path):
 def test_log_level_env_is_upper_cased(tmp_path: Path):
     config = load_config(_write(tmp_path, ""), env={"VOCAST_LOG_LEVEL": "debug"})
     assert config.log_level == "DEBUG"
+
+
+# --- worker model idle timeout ---------------------------------------------
+
+
+@pytest.mark.parametrize("seconds", [0, 120])
+def test_model_idle_seconds_from_yaml(tmp_path: Path, seconds: int):
+    path = _write(tmp_path, f"worker:\n  model_idle_seconds: {seconds}\n")
+    assert load_config(path, env={}).worker.model_idle_seconds == seconds
+
+
+@pytest.mark.parametrize("seconds", [0, 120])
+def test_model_idle_seconds_env_overrides_yaml(tmp_path: Path, seconds: int):
+    path = _write(tmp_path, "worker:\n  model_idle_seconds: 600\n")
+    config = load_config(path, env={"VOCAST_WORKER_MODEL_IDLE_SECONDS": str(seconds)})
+    assert config.worker.model_idle_seconds == seconds
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "true", "nope"])
+def test_model_idle_seconds_rejects_invalid_yaml(tmp_path: Path, value: str):
+    path = _write(tmp_path, f"worker:\n  model_idle_seconds: {value}\n")
+    with pytest.raises(ConfigError, match=r"worker\.model_idle_seconds must be"):
+        load_config(path, env={})
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "true", "nope"])
+def test_model_idle_seconds_rejects_invalid_env(tmp_path: Path, value: str):
+    path = _write(tmp_path, "")
+    with pytest.raises(ConfigError, match="VOCAST_WORKER_MODEL_IDLE_SECONDS must be"):
+        load_config(path, env={"VOCAST_WORKER_MODEL_IDLE_SECONDS": value})
 
 
 # --- ${VAR} interpolation --------------------------------------------------

@@ -51,6 +51,10 @@ worker:
   # Number of articles synthesized in parallel. Each worker loads its own copy
   # of the TTS model, so raising this multiplies memory use.
   concurrency: 1
+  # Unload each worker's model after this many seconds without work. Active
+  # narration is unaffected; the next article reloads the model. 0 disables idle
+  # unloading. Pause and worker exit always unload it, regardless of this value.
+  model_idle_seconds: 300
   # An entry claimed but unfinished for this long is assumed to belong to a
   # crashed worker and is requeued.
   processing_timeout_minutes: 60

@@ -62,6 +62,9 @@ class StubGenerator:
     def discard_resume(self, resume_key: str) -> None:
         self.discarded_resume_keys.append(resume_key)
 
+    def release_engine(self) -> None:
+        pass
+
     def generate_from_url(
         self,
         url: str,

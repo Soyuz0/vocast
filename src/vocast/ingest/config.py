@@ -23,6 +23,7 @@ Environment variable convention
     VOCAST_POLLING_DEFAULT_INTERVAL_MINUTES
     VOCAST_POLLING_FULL_POLL_HOURS
     VOCAST_WORKER_CONCURRENCY
+    VOCAST_WORKER_MODEL_IDLE_SECONDS
     VOCAST_WORKER_PROCESSING_TIMEOUT_MINUTES
     VOCAST_WORKER_MAX_RETRIES
     VOCAST_WORKER_BASE_RETRY_MINUTES
@@ -169,6 +170,9 @@ class WorkerConfig:
     #: every worker grabs every core, and N workers oversubscribe the machine
     #: N-fold: the threads then spend their time contending rather than working.
     threads_per_worker: int | None = None
+    #: Unload this worker's model after this many seconds without work. Zero
+    #: disables idle unloading; pause and worker exit always unload the model.
+    model_idle_seconds: int = 300
 
 
 @dataclass(frozen=True)
@@ -453,6 +457,12 @@ def _from_mapping(raw: dict[str, Any]) -> Config:
                 WorkerConfig.threads_per_worker,
                 "worker.threads_per_worker",
             ),
+            model_idle_seconds=_as_int(
+                worker.get("model_idle_seconds"),
+                WorkerConfig.model_idle_seconds,
+                "worker.model_idle_seconds",
+                minimum=0,
+            ),
         ),
         retention=RetentionConfig(
             enabled=_as_bool(
@@ -570,6 +580,12 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, str], ...] = (
     ("VOCAST_POLLING_FULL_POLL_HOURS", "polling", "full_poll_hours", "int"),
     ("VOCAST_WORKER_CONCURRENCY", "worker", "concurrency", "int"),
     (
+        "VOCAST_WORKER_MODEL_IDLE_SECONDS",
+        "worker",
+        "model_idle_seconds",
+        "nonnegative_int",
+    ),
+    (
         "VOCAST_WORKER_PROCESSING_TIMEOUT_MINUTES",
         "worker",
         "processing_timeout_minutes",
@@ -632,6 +648,8 @@ def _coerce_env(raw: str, kind: str, name: str) -> Any:
         return _as_bool(raw, False, name)
     if kind == "int":
         return _as_int(raw, 0, name)
+    if kind == "nonnegative_int":
+        return _as_int(raw, 0, name, minimum=0)
     if kind == "opt_int":
         return _as_optional_int(raw, None, name)
     raise AssertionError(f"unhandled env coercion {kind!r}")

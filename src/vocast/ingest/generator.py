@@ -8,6 +8,7 @@ manual `vocast add` path and the automated path always produce identical audio.
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import re
 from collections.abc import Callable
@@ -168,12 +169,14 @@ class EpisodeGenerator(Protocol):
 
     def discard_resume(self, resume_key: str) -> None: ...
 
+    def release_engine(self) -> None: ...
+
 
 class VocastEpisodeGenerator:
     """Drives the existing vocast pipeline for one article.
 
-    The TTS engine is constructed lazily and then reused, because loading the
-    Kokoro weights costs seconds and would otherwise be paid per episode.
+    The TTS engine is constructed lazily and reused between articles. The
+    owning worker can release it while idle, then the next article reloads it.
     """
 
     def __init__(
@@ -497,6 +500,19 @@ class VocastEpisodeGenerator:
 
     def _fetch_html(self, url: str) -> str:
         return fetch(url, policy=self._policy).text()
+
+    def release_engine(self) -> None:
+        """Drop the model once this worker has finished or cancelled narration.
+
+        Called only by the owning worker thread, never during synthesis. Some
+        engines contain reference cycles, so collect after dropping our reference
+        rather than waiting for unrelated work to trigger collection.
+        """
+        if self._engine is None:
+            return
+        self._engine = None
+        gc.collect()
+        log.info("unloaded TTS engine %s", kv(engine=self._engine_name))
 
     def _resolve_engine(self) -> TTSEngine:
         if self._engine is None:

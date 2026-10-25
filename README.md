@@ -708,6 +708,7 @@ download on first use to `VOCAST_TTS_MODEL_DIR` (default `~/.vocast/models`).
 ```yaml
 worker:
   concurrency: 3           # articles narrated in parallel
+  model_idle_seconds: 300  # unload the model after five minutes without work
   threads_per_worker: 1    # compute threads each may use
   nice: 15                 # yield to interactive work
   newest_first: true       # narrate recent articles before old ones
@@ -719,6 +720,14 @@ CPUs / concurrency, which is almost always what you want. Left to the TTS
 library's own default, *every* worker takes *every* core: four workers on a
 four-CPU quota means twenty-four compute threads contending for four cores,
 which reads as fully-busy CPU while producing almost nothing.
+
+Each worker independently unloads its model after `worker.model_idle_seconds`
+without work, five minutes by default. Active narration is unaffected, and the
+next article reloads the model. Set it to `0` to disable idle unloading, or use
+`VOCAST_WORKER_MODEL_IDLE_SECONDS` to override it through the environment. The
+value must be a nonnegative integer. Pause and worker exit always unload the
+model, regardless of this setting. Unloading can reduce memory use, but runtime
+and allocator caches may keep some RAM allocated.
 
 `nice` deprioritizes only the synthesis threads -- on Linux `nice` is per-thread,
 so the HTTP server stays responsive. It does not reduce throughput on an

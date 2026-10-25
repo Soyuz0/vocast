@@ -7,6 +7,8 @@ The pipeline itself (trafilatura, Kokoro, ffmpeg) is mocked at the boundary.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import Mock
+from weakref import ref
 
 import numpy as np
 import pytest
@@ -303,6 +305,61 @@ def test_engine_is_loaded_once_and_reused(lib: Path, monkeypatch: pytest.MonkeyP
     gen.generate_from_url("https://example.com/b")
 
     assert loads == ["kokoro"]
+
+
+def test_releasing_an_unloaded_engine_does_not_load_or_collect(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    load = Mock()
+    collect = Mock()
+    monkeypatch.setattr(generator_module, "get_engine", load)
+    monkeypatch.setattr(generator_module.gc, "collect", collect)
+    gen = VocastEpisodeGenerator()
+
+    gen.release_engine()
+    gen.release_engine()
+
+    load.assert_not_called()
+    collect.assert_not_called()
+
+
+def test_releasing_an_engine_drops_cyclic_model_references():
+    class CyclicEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.cycle = self
+
+    model = CyclicEngine()
+    model_ref = ref(model)
+    gen = VocastEpisodeGenerator(engine=model)
+    del model
+
+    gen.release_engine()
+
+    assert model_ref() is None
+
+
+def test_next_article_reloads_the_engine_after_release(
+    lib: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _stub_extraction(monkeypatch)
+    load = Mock(side_effect=lambda name: FakeEngine())
+    monkeypatch.setattr(generator_module, "get_engine", load)
+    gen = VocastEpisodeGenerator(engine_name="kokoro-onnx")
+    gen.generate_from_url("https://example.com/a")
+    first_model = ref(gen._engine)
+
+    gen.release_engine()
+    gen.release_engine()
+    assert first_model() is None
+    gen.generate_from_url("https://example.com/b")
+    gen.generate_from_url("https://example.com/c")
+
+    assert [call.args for call in load.call_args_list] == [
+        ("kokoro-onnx",),
+        ("kokoro-onnx",),
+    ]
 
 
 def test_guarded_fetcher_is_used_for_article_html(
@@ -913,9 +970,9 @@ def test_a_javascript_notice_falls_back_to_the_feed_copy(
         "https://www.lesswrong.com/posts/x/y", content_html=FEED_BODY
     )
 
-    assert "newsletter's own text" in library.get_entry(
-        episode.episode_id
-    ).article_text()
+    assert (
+        "newsletter's own text" in library.get_entry(episode.episode_id).article_text()
+    )
 
 
 def test_an_article_discussing_javascript_is_still_narrated(
@@ -943,9 +1000,9 @@ def test_the_feed_wins_when_the_page_yields_far_less(
         "https://example.com/a", content_html=FEED_BODY
     )
 
-    assert "newsletter's own text" in library.get_entry(
-        episode.episode_id
-    ).article_text()
+    assert (
+        "newsletter's own text" in library.get_entry(episode.episode_id).article_text()
+    )
 
 
 def test_a_full_page_is_not_displaced_by_a_similar_feed_body(
@@ -997,12 +1054,13 @@ def test_a_cancelled_narration_keeps_its_chunks_for_the_next_attempt(
     )
     with pytest.raises(GenerationCancelled):
         stopped.generate_from_url("https://example.com/a", resume_key="entry-7")
+    stopped.release_engine()
     staged = sorted((staging / "entry-7").glob("chunk-*.npy"))
 
     resuming = FakeEngine()
-    VocastEpisodeGenerator(engine=resuming, staging_root=staging).generate_from_url(
-        "https://example.com/a", resume_key="entry-7"
-    )
+    monkeypatch.setattr(generator_module, "get_engine", lambda name: resuming)
+    allowed["chunks"] = 100
+    stopped.generate_from_url("https://example.com/a", resume_key="entry-7")
 
     assert len(staged) == 1, "the chunk narrated before the pause must survive it"
     assert len(resuming.synthesized) == _chunk_count(LONG_ARTICLE) - 1
@@ -1045,9 +1103,9 @@ def test_a_permanent_failure_discards_chunks_from_an_earlier_attempt(
 
     _stub_extraction_raising(monkeypatch, BlockedURLError("blocked forever"))
     with pytest.raises(PermanentGenerationError):
-        VocastEpisodeGenerator(engine=FakeEngine(), staging_root=staging).generate_from_url(
-            "https://example.com/a", resume_key="entry-7"
-        )
+        VocastEpisodeGenerator(
+            engine=FakeEngine(), staging_root=staging
+        ).generate_from_url("https://example.com/a", resume_key="entry-7")
 
     assert not (staging / "entry-7").exists()
 

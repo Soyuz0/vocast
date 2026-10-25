@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import os
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -59,6 +60,10 @@ class Worker:
     @property
     def config(self) -> WorkerConfig:
         return self._config
+
+    def release_engine(self) -> None:
+        """Release this worker's model when no generation is in flight."""
+        self._generator.release_engine()
 
     def reclaim_stale(self, *, now: datetime | None = None) -> int:
         """Requeue entries whose worker died mid-generation."""
@@ -304,13 +309,26 @@ class WorkerLoop:
     def _run(self) -> None:
         self._apply_nice()
         log.info("worker started %s", kv(name=self._name, nice=self._nice or None))
+        try:
+            self._work_until_stopped()
+        finally:
+            self._release_engine()
+            log.info("worker stopped %s", kv(name=self._name))
+
+    def _work_until_stopped(self) -> None:
         self._worker.reclaim_stale()
         was_paused = False
+        idle_since: float | None = None
+        released = False
+        timeout = self._worker.config.model_idle_seconds
         while not self._stop.is_set():
             if self._paused():
                 if not was_paused:
                     log.info("worker paused %s", kv(name=self._name))
                     was_paused = True
+                if not released:
+                    released = self._release_engine()
+                idle_since = None
                 self._stop.wait(self._idle_seconds)
                 continue
             if was_paused:
@@ -322,12 +340,31 @@ class WorkerLoop:
             except Exception:
                 log.exception("worker loop error")
                 outcome = None
+                # The failed attempt may have narrated an article before a
+                # database write failed. Count idle time only after it returns.
+                released = False
+                idle_since = None
             finally:
                 self._busy.clear()
             if outcome is None:
+                now = time.monotonic()
+                if idle_since is None:
+                    idle_since = now
+                if not released and timeout > 0 and now - idle_since >= timeout:
+                    released = self._release_engine()
                 # Nothing due; wait, but wake immediately on shutdown.
                 self._stop.wait(self._idle_seconds)
-        log.info("worker stopped %s", kv(name=self._name))
+            else:
+                idle_since = None
+                released = False
+
+    def _release_engine(self) -> bool:
+        try:
+            self._worker.release_engine()
+        except Exception:
+            log.exception("could not unload TTS engine %s", kv(name=self._name))
+            return False
+        return True
 
     def _paused(self) -> bool:
         if self._is_paused is None:
